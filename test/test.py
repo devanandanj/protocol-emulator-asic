@@ -1,14 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 """
-Phase 0 sanity tests for the blinky counter.
+Phase 2 Step 1 sanity test.
 
-These tests just verify that:
-  - reset holds the counter at 0
-  - the counter increments each cycle
-  - ui_in selects which counter bit is exposed on uo_out[0]
-
-Once we swap the blinky for the real PEmu core, this file will be
-replaced with per-protocol testbenches (uart_tx, uart_rx, spi, i2c).
+The RTL currently implements NOP and JMP. The hardcoded program is
+five NOPs followed by JMP 0 at address 5. After reset, PC should:
+  cycle 1: 1  (NOP at 0)
+  cycle 2: 2  (NOP at 1)
+  ...
+  cycle 5: 5  (NOP at 4)
+  cycle 6: 0  (JMP at 5 taking us back)
+  cycle 7: 1  (NOP at 0)
+  ...
+Once more opcodes land, this test grows or gets replaced.
 """
 
 import cocotb
@@ -27,47 +30,14 @@ async def _reset(dut):
 
 
 @cocotb.test()
-async def test_reset_zeros_output(dut):
-    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
-    dut.ena.value = 1
-    dut.ui_in.value = 0
-    dut.uio_in.value = 0
-    dut.rst_n.value = 0
-    await ClockCycles(dut.clk, 5)
-    # During reset the counter is 0, so uo_out[0] (bit 0 of counter) is 0.
-    assert int(dut.uo_out.value) & 0x01 == 0
-
-
-@cocotb.test()
-async def test_bit0_toggles_every_cycle(dut):
-    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+async def test_pc_advances_and_wraps(dut):
+    cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
     await _reset(dut)
-    dut.ui_in.value = 0  # tap = bit 0
-    prev = int(dut.uo_out.value) & 0x01
-    flips = 0
-    for _ in range(16):
-        await RisingEdge(dut.clk)
-        cur = int(dut.uo_out.value) & 0x01
-        if cur != prev:
-            flips += 1
-        prev = cur
-    # Bit 0 of a free-running counter flips every cycle.
-    assert flips >= 14, f"bit 0 barely toggled ({flips} flips in 16 cycles)"
 
-
-@cocotb.test()
-async def test_higher_tap_toggles_slower(dut):
-    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
-    await _reset(dut)
-    dut.ui_in.value = 3  # tap = bit 3 -> toggles every 8 cycles
-    await RisingEdge(dut.clk)
-    prev = int(dut.uo_out.value) & 0x01
-    flips = 0
-    for _ in range(64):
+    pc = dut.user_project.core.pc
+    # After reset, expect PC to walk 1..5 then wrap to 0 via JMP.
+    expected = [1, 2, 3, 4, 5, 0, 1, 2]
+    for want in expected:
         await RisingEdge(dut.clk)
-        cur = int(dut.uo_out.value) & 0x01
-        if cur != prev:
-            flips += 1
-        prev = cur
-    # Expect ~64/8 = 8 flips, allow slack for reset alignment.
-    assert 4 <= flips <= 12, f"bit 3 flipped {flips} times (expected ~8)"
+        got = int(pc.value)
+        assert got == want, f"expected pc={want}, got {got}"

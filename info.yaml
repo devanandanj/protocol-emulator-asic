@@ -13,11 +13,11 @@ project:
   # CMOS5L shuttle actually accepts before committing to floorplan.
   tiles: "1x1"
 
-  # TODO: rename to include GitHub username before submitting, e.g. tt_um_yourname_pemu
   top_module:  "tt_um_devanandanj_pemu"
 
   source_files:
     - "project.v"
+    - "pemu_core.v"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 # Assignments below are the *target* PEmu pinout — the Phase 0 blinky
