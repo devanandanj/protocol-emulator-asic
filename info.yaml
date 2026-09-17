@@ -1,0 +1,57 @@
+# Tiny Tapeout project information
+project:
+  title:        "Protocol Emulator (PEmu)"
+  author:       "Devanandan J"
+  discord:      ""
+  description:  "Programmable pin-bit-banging core that emulates UART, SPI, I2C via firmware"
+  language:     "Verilog"
+  clock_hz:     50000000
+
+  # Phase 0 blinky fits in 1x1. Bump this up when the real core lands.
+  # Blog target is 8x4; template comment lists 1x1..8x2 as valid — CONFIRM
+  # via TT docs / ask on the competition Discord which tile shapes the
+  # CMOS5L shuttle actually accepts before committing to floorplan.
+  tiles: "1x1"
+
+  # TODO: rename to include GitHub username before submitting, e.g. tt_um_yourname_pemu
+  top_module:  "tt_um_devanandanj_pemu"
+
+  source_files:
+    - "project.v"
+
+# The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
+# Assignments below are the *target* PEmu pinout — the Phase 0 blinky
+# only drives uo[0] and reads ui[4:0].
+pinout:
+  # Inputs
+  ui[0]: "divider tap sel[0] (blinky) / GPIO in 0 (pemu)"
+  ui[1]: "divider tap sel[1] (blinky) / GPIO in 1 (pemu)"
+  ui[2]: "divider tap sel[2] (blinky) / GPIO in 2 (pemu)"
+  ui[3]: "divider tap sel[3] (blinky) / GPIO in 3 (pemu)"
+  ui[4]: "divider tap sel[4] (blinky) / GPIO in 4 (pemu)"
+  ui[5]: ""
+  ui[6]: ""
+  ui[7]: ""
+
+  # Outputs
+  uo[0]: "blink / GPIO out 0"
+  uo[1]: "GPIO out 1"
+  uo[2]: "GPIO out 2"
+  uo[3]: "GPIO out 3"
+  uo[4]: "GPIO out 4"
+  uo[5]: "GPIO out 5"
+  uo[6]: "GPIO out 6"
+  uo[7]: "GPIO out 7"
+
+  # Bidirectional pins (reserved for programmable I/O in the real core)
+  uio[0]: ""
+  uio[1]: ""
+  uio[2]: ""
+  uio[3]: ""
+  uio[4]: ""
+  uio[5]: ""
+  uio[6]: ""
+  uio[7]: ""
+
+# Do not change!
+yaml_version: 6

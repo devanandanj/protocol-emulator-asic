@@ -1,0 +1,40 @@
+.DS_Store
+.idea
+*.vcd
+*.fst
+*.fst.hier
+runs
+tt_submission
+src/user_config.json
+src/config_merged.json
+test/sim_build
+test/__pycache__/
+test/results.xml
+test/gate_level_netlist.v
+
+tt-template/
+
+# Python 
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# C++
+cmake-build-debug
+build/
+build-*/
+*.o
+*.obj
+*.exe
+compile_commands.json
+CMakeUserPresets.json
+CMakeCache.txt
+CMakeFiles/
+
+# Editor
+*.swp
+*~
+
+# Personal notes
+notes.md
