@@ -309,6 +309,15 @@ u16 encode_ldi(const std::vector<std::string>& ops) {
     return static_cast<u16>((u16{0xC} << 12) | (reg << 8) | imm);
 }
 
+u16 encode_rot(const std::vector<std::string>& ops) {
+    require_operand_count(ops, 3, "ROT", "reg, dir, count");
+    const u32 reg   = parse_register(ops[0]);
+    const u32 dir   = parse_direction(ops[1]);
+    const u32 count = parse_number(ops[2]);
+    require_range(count, 0xF, "ROT count");
+    return static_cast<u16>((u16{0xD} << 12) | (reg << 8) | (dir << 7) | count);
+}
+
 }  // namespace
 
 // -----------------------------------------------------------------
@@ -368,6 +377,7 @@ AssembleResult assemble(std::istream& in) {
             else if (m == "pull")  word = encode_pull (line.operands);
             else if (m == "irq")   word = encode_irq  (line.operands);
             else if (m == "ldi")   word = encode_ldi  (line.operands);
+            else if (m == "rot")   word = encode_rot  (line.operands);
             else throw std::runtime_error("unknown mnemonic '" + m + "'");
             r.words.push_back(word);
         } catch (const std::exception& e) {

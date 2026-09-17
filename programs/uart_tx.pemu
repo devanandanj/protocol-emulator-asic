@@ -1,0 +1,34 @@
+; UART TX @ 115200 baud, 50 MHz core clock, 8N1
+; Bit period = 434 core cycles.
+; Pin 0 = TX (idle high).
+;
+; Registers:
+;   r0 = data byte, shifted right after each bit
+;   r1 = data-bit loop counter (init to 7; JCND does N+1 iterations = 8)
+;
+; Slot budget (must total 434 cycles):
+;   start bit  : set (1) + ldi (1) + delay 432 = 434
+;   data bit   : out (1) + delay 431 + shift (1) + jcnd (1) = 434
+;   stop bit   : set (1) + delay 433 = 434
+;
+; Frame = 10 slots x 434 cycles = 4340 cycles = 86.8 us per byte.
+
+start:  set   0, 1              ; idle high, assert OE on pin 0
+        pull  r0                ; block until host provides a byte
+
+        ; ---- start bit ----
+        set   0, 0              ; drop TX low
+        ldi   r1, 7             ; JCND loops 8 times total (7 branches + 1 fall-through)
+        delay 432               ; hold start bit for rest of slot
+
+        ; ---- 8 data bits, LSB first ----
+data:   out   0, r0             ; drive current LSB
+        delay 431               ; hold bit value
+        shift r0, right, 1      ; slide next bit into position 0
+        jcnd  r1, data          ; loop back until r1 hits 0
+
+        ; ---- stop bit ----
+        set   0, 1              ; TX back high
+        delay 433
+
+        jmp   start             ; next byte

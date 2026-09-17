@@ -37,6 +37,7 @@ enum class Op : std::uint8_t {
     Pull  = 0xA,
     Irq   = 0xB,
     Ldi   = 0xC,   // load immediate into register
+    Rot   = 0xD,   // Rotate Shift Register
 };
 
 inline constexpr std::size_t kNumRegs      = 8;

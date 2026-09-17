@@ -138,6 +138,13 @@ void ldi_imm_out_of_range_reports_error() {
     assert(r.errors[0].find("LDI imm") != std::string::npos);
 }
 
+void rot_encoding() {
+    auto r = asm_str("rot r0, right, 1");
+    assert(r.ok() && r.words.size() == 1);
+    // op=D, reg=0, dir=1, count=1 -> 0xD081
+    assert(r.words[0] == 0xD081);
+}
+
 // -----------------------------------------------------------------
 // Error cases
 // -----------------------------------------------------------------

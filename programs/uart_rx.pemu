@@ -1,0 +1,30 @@
+; UART RX @ 115200 baud, 50 MHz core clock, 8N1
+; Bit period = 434 core cycles.
+; Pin 3 = RX (idle high).
+;
+; Strategy: wait indefinitely for start bit (falling edge), skip 1.5
+; bit periods to align to the middle of data bit 0, then sample-and-
+; rotate-right 8 times to assemble the LSB-first byte in natural order.
+;
+; Registers:
+;   r0 = received byte (built LSB-first via IN + ROT right)
+;   r1 = data-bit counter (init 7; JCND runs body 8 times)
+;
+; Cycle budget:
+;   post-WAIT to first IN: ldi (1) + delay 649 (649) + fetch-IN cycle
+;     lands us on cycle T+651 = mid of data bit 0 (T = WAIT completion).
+;   data loop iter: in (1) + rot (1) + delay 431 (431) + jcnd (1) = 434
+
+rxloop: ldi   r0, 0             ; clear accumulator
+        wait  3, 0, 0           ; block indefinitely for start bit (RX low)
+        ldi   r1, 7             ; 8 data bits (JCND runs body N+1 times)
+        delay 649               ; 1.5 bit periods to mid of data bit 0
+
+sample: in    3, r0             ; sample RX into bit 0
+        rot   r0, right, 1      ; slide the just-sampled bit toward bit 7
+        delay 431               ; hold for the rest of the bit period
+        jcnd  r1, sample        ; loop back 7 times (+1 fall-through = 8 total)
+
+        push  r0                ; deliver byte to host RX FIFO
+        irq   0                 ; signal "byte available" (host clears)
+        jmp   rxloop

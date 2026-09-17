@@ -234,6 +234,24 @@ void Core::step() {
             ++pc_;
             break;
         }
+
+        case Op::Rot: {
+            const u32 reg = (ins.operand >> 8) & 0xFu;
+            const u32 dir = (ins.operand >> 7) & 0x1u;
+            const u32 count = ins.operand      & 0xFu;
+            check_reg_in_range(reg);
+            const u32 n = count % 8u;
+            const u32 v = regs_[reg];
+            if (n != 0u) {
+                if (dir == 0u) {
+                    regs_[reg] = static_cast<u8>(((v << n) | (v >> (8u - n))) & 0xFFu);
+                } else {
+                    regs_[reg] = static_cast<u8>(((v >> n) | (v << (8u - n))) & 0xFFu);
+                }
+            }
+            ++pc_;
+            break;
+        }
     }
 
     ++cycles_;

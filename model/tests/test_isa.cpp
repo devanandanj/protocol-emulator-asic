@@ -515,6 +515,56 @@ void ldi_invalid_register_throws() {
     assert(threw);
 }
 
+// Rot
+// ROT
+constexpr std::uint16_t encode_rot(std::uint16_t reg,
+                                   std::uint16_t dir,
+                                   std::uint16_t count) {
+    return static_cast<std::uint16_t>(
+        (std::uint16_t{0xD} << 12)
+        | ((reg   & 0xF) << 8)
+        | ((dir   & 0x1) << 7)
+        |  (count & 0xF));
+}
+
+void rot_right_wraps_bit0_to_bit7() {
+    pemu::Core c({ encode_rot(0, /*right=*/1, 1) });
+    c.set_reg(0, 0x01);
+    c.step();
+    assert(c.regs()[0] == 0x80);
+}
+
+void rot_left_wraps_bit7_to_bit0() {
+    pemu::Core c({ encode_rot(0, /*left=*/0, 1) });
+    c.set_reg(0, 0x80);
+    c.step();
+    assert(c.regs()[0] == 0x01);
+}
+
+void rot_right_2_moves_bits_correctly() {
+    pemu::Core c({ encode_rot(0, 1, 2) });
+    c.set_reg(0, 0b11000011);
+    c.step();
+    // Rotate right 2: bits 0..1 wrap to bits 6..7.
+    assert(c.regs()[0] == 0b11110000);
+}
+
+void rot_by_zero_is_noop_but_advances_state() {
+    pemu::Core c({ encode_rot(0, 0, 0) });
+    c.set_reg(0, 0x5A);
+    c.step();
+    assert(c.regs()[0] == 0x5A);
+    assert(c.snapshot().pc == 1);
+    assert(c.snapshot().cycle == 1);
+}
+
+void rot_by_eight_is_full_rotation_noop() {
+    pemu::Core c({ encode_rot(0, 1, 8) });
+    c.set_reg(0, 0x5A);
+    c.step();
+    assert(c.regs()[0] == 0x5A);   // 8 mod 8 = 0
+}
+
 
 } // namespace
 
@@ -576,6 +626,12 @@ int main() {
     ldi_loads_immediate_into_register();
     ldi_overwrites_previous_value();
     ldi_invalid_register_throws();
+    // ROT
+    rot_right_wraps_bit0_to_bit7();
+    rot_left_wraps_bit7_to_bit0();
+    rot_right_2_moves_bits_correctly();
+    rot_by_zero_is_noop_but_advances_state();
+    rot_by_eight_is_full_rotation_noop();
 
     std::cout << "pemu_model_tests: all tests passed\n";
     return 0;

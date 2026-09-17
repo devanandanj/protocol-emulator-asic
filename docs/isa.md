@@ -51,6 +51,7 @@ they explicitly wait.
 | `PULL r`     | 0xA      | reg[11:8]                            | Pop TX FIFO into `regs[r]`; stall until non-empty.     |
 | `IRQ n`      | 0xB      | irq[11:8]                            | Set bit `n` of host-visible `irq_lines` (level, host clears). |
 | `LDI r,imm`  | 0xC      | reg[11:8], imm[7:0]                  | `regs[r] = imm`. Load 8-bit immediate into register.   |
+| `ROT r,d,c`  | 0xD      | reg[11:8], dir[7], count[3:0]        | Rotate `regs[r]` by `c mod 8` positions. dir=0 left, dir=1 right. |
 
 
 ### SET encoding detail
@@ -210,6 +211,15 @@ they explicitly wait.
   changing anything about how PULL/IN behave.
 - Assembler: `ldi r0, 0x5A` — accepts decimal, `0x`-hex, or `0b`-
   binary immediates.
+
+### ROT encoding detail
+
+- Same field layout as SHIFT (reg [11:8], dir [7], count [3:0]).
+- **Rotation**, not shift — bits leaving one end reappear at the other.
+- `count mod 8` is used, so rotating by 8, 16, ..., is a no-op.
+- Added specifically so UART RX (and other LSB-first serial protocols)
+  can assemble bytes in natural memory order via `IN + ROT r, right, 1`.
+  Without it, sample-and-shift produces bit-reversed bytes.
 
 **Open questions to resolve during Phase 1:**
 
