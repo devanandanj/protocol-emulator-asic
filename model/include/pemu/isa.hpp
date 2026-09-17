@@ -94,10 +94,15 @@ private:
     std::array<std::uint8_t, kNumRegs>    regs_{};
     std::deque<std::uint8_t>              tx_fifo_;   // host -> core
     std::deque<std::uint8_t>              rx_fifo_;   // core -> host
-    std::uint32_t                         pin_in_{0};
-    std::uint32_t                         pin_out_{0};
-    std::uint32_t                         pin_oe_{0};
-    std::uint64_t                         cycles_{0};
+    std::uint32_t                         pin_in_{};
+    std::uint32_t                         pin_out_{};
+    std::uint32_t                         pin_oe_{};
+    std::uint64_t                         cycles_{};
+    std::uint16_t                         stall_remaining_{};
+    bool                                  waiting_for_pin_{false};
+    bool                                  wait_forever_{false};
+    std::uint8_t                          wait_pin_{};
+    std::uint8_t                          wait_val_{};
 };
 
 }
