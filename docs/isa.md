@@ -45,11 +45,11 @@ they explicitly wait.
 | `IN pin,r`   | 0x4      | pin[11:8], reg[7:4]                  | Release `pin`'s OE, sample `pin_in[pin]` into `regs[r] & 1` |
 | `WAIT pin,v,t`| 0x5     | pin[11:8], val[7], timeout[6:0]      | Release `pin`'s OE, stall until `pin_in[pin]==val` or `t` cycles elapse; `t==0` means indefinite |
 | `DELAY n`    | 0x6      | n[11:0]                              | Consume exactly `max(n,1)` cycles; PC advances at issue, remaining cycles stall |
-| `JMP a`      | 0x7      | addr[11:0]                           | PC ← addr                                              |
-| `JCND c,a`   | 0x8      | cond[3:0], addr[7:0]                 | PC ← addr if `cond` true (zero, carry, pin==0, etc.)   |
-| `PUSH r`     | 0x9      | reg[3:0]                             | Push register to host RX FIFO                          |
-| `PULL r`     | 0xA      | reg[3:0]                             | Pop from host TX FIFO into register                    |
-| `IRQ n`      | 0xB      | irq[3:0]                             | Raise IRQ line `n` to host                             |
+| `JMP a`      | 0x7      | addr[11:0]                           | `pc = addr`. Unconditional, 1 cycle.                   |
+| `JCND r,a`   | 0x8      | reg[11:8], addr[7:0]                 | If `regs[r] != 0`: `--regs[r]`, `pc = addr`. Else `pc++`. |
+| `PUSH r`     | 0x9      | reg[11:8]                            | Append `regs[r]` to RX FIFO (host reads); throw if full. |
+| `PULL r`     | 0xA      | reg[11:8]                            | Pop TX FIFO into `regs[r]`; stall until non-empty.     |
+| `IRQ n`      | 0xB      | irq[11:8]                            | Set bit `n` of host-visible `irq_lines` (level, host clears). |
 
 
 ### SET encoding detail
@@ -134,6 +134,68 @@ they explicitly wait.
   `stall_remaining_` counter so `step()` still corresponds to
   exactly one clock edge, which is essential for cycle-for-cycle
   comparison with the RTL. `WAIT` will reuse this mechanism.
+
+### JMP encoding detail
+
+- `addr` is 12 bits [11:0], range 0..4095. Covers any position in
+  the 128-word (or up to 4096-word) program memory.
+- 1 cycle. `pc = addr` unconditionally. The next `step()` fetches
+  program[addr]; PC-bounds checking runs there, not in JMP.
+
+### JCND encoding detail
+
+- `reg` at [11:8], `addr` at [7:0] (8 bits, 0..255).
+- Semantics: **decrement-and-branch-if-nonzero**. If `regs[r] != 0`,
+  `regs[r] -= 1` and `pc = addr`. If `regs[r] == 0`, PC falls through
+  (r unchanged).
+- 1 cycle either way.
+- Loop idiom: load counter into a register, do the body, `JCND r, top`.
+  Executes body exactly N+1 times where N is the initial counter
+  (N branches back + 1 fall-through). To loop *exactly* N times,
+  preload with N-1.
+- For pin-based branches: `IN pin, r; JCND r, target` — sampled bit
+  becomes r=0 or r=1; the JCND then branches iff the pin was 1
+  (also decrementing r back to 0). Two-instruction pattern; if this
+  is too costly in real programs we'll revisit with a dedicated
+  pin-conditional branch.
+- `addr` is only 8 bits, so JCND targets must live in the first
+  256 program words. Beyond that, use JMP.
+
+### PUSH encoding detail
+
+- `reg` at [11:8]. Bits [7:0] reserved.
+- Appends `regs[r]` (8-bit) to the RX FIFO — the *core-to-host*
+  direction. Named from the host's perspective: the host reads
+  from RX.
+- RX FIFO is bounded at `kFifoSize` (16 entries in v0.1). Push
+  onto a full FIFO throws in the model. In the RTL this maps to
+  a "FIFO full" IRQ or a program-visible flag; deferred to Phase 2.
+- 1 cycle.
+
+### PULL encoding detail
+
+- `reg` at [11:8]. Bits [7:0] reserved.
+- Pops the front byte of the TX FIFO (the *host-to-core* direction)
+  and writes it into `regs[r]`.
+- If the TX FIFO is empty at issue, PULL **stalls** until the host
+  pushes a byte, then completes on the cycle after data arrives.
+  PC advances at issue; subsequent stall cycles don't touch PC.
+- 1 cycle when data is ready; unbounded stall when it isn't. This
+  is the standard "consumer waits on producer" seam that lets
+  cocotb drive protocol tests by pacing `push_tx()`.
+
+### IRQ encoding detail
+
+- `n` at [11:8], range 0..15. Bits [7:0] reserved.
+- Sets bit `n` of the host-visible `irq_lines` register. Latching:
+  the bit stays set until the host calls `clear_irq(n)`.
+- Multiple IRQ opcodes accumulate independent bits (bitmask OR).
+  Clearing a bit that isn't set — or an out-of-range index — is a
+  silent no-op.
+- 1 cycle.
+- Programs typically raise IRQ to signal "byte ready in RX FIFO"
+  or "protocol error"; cocotb tests block until a specific bit
+  goes high, then service and clear.
 
 **Open questions to resolve during Phase 1:**
 

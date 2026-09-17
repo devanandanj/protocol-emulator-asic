@@ -31,11 +31,14 @@ void Core::reset() noexcept {
     pin_out_ = 0;
     pin_oe_  = 0;
     cycles_  = 0;
-    stall_remaining_ = 0;
-    waiting_for_pin_ = false;
-    wait_forever_    = false;
-    wait_pin_        = 0;
-    wait_val_        = 0;
+    stall_remaining_  = 0;
+    waiting_for_pin_  = false;
+    wait_forever_     = false;
+    wait_pin_         = 0;
+    wait_val_         = 0;
+    waiting_for_pull_ = false;
+    pull_reg_         = 0;
+    irq_lines_        = 0;
 }
 
 void Core::step() {
@@ -59,6 +62,19 @@ void Core::step() {
 
     if (stall_remaining_ > 0u) {
         --stall_remaining_;
+        ++cycles_;
+        return;
+    }
+
+    // PULL stall service: waiting for the host to push a byte into
+    // the TX FIFO. Independent of the WAIT/DELAY stall paths above
+    // because only one instruction can be in flight at a time.
+    if (waiting_for_pull_) {
+        if (!tx_fifo_.empty()) {
+            regs_[pull_reg_] = tx_fifo_.front();
+            tx_fifo_.pop_front();
+            waiting_for_pull_ = false;
+        }
         ++cycles_;
         return;
     }
@@ -160,13 +176,55 @@ void Core::step() {
             break;
         }
 
-        // Todo:
-        case Op::Jmp:
-        case Op::Jcnd:
-        case Op::Push:
-        case Op::Pull:
-        case Op::Irq:
-            throw std::runtime_error("PEmu: opcode not yet implemented");
+        case Op::Jmp: {
+            pc_ = static_cast<u16>(ins.operand & 0x0FFFu);
+            break;
+        }
+
+        case Op::Jcnd: {
+            const u32 reg  = (ins.operand >> 8) & 0xFu;
+            const u32 addr =  ins.operand       & 0xFFu;
+            check_reg_in_range(reg);
+            if (regs_[reg] != 0u) {
+                --regs_[reg];
+                pc_ = static_cast<u16>(addr);
+            } else {
+                ++pc_;
+            }
+            break;
+        }
+
+        case Op::Push: {
+            const u32 reg = (ins.operand >> 8) & 0xFu;
+            check_reg_in_range(reg);
+            if (rx_fifo_.size() >= kFifoSize) {
+                throw std::runtime_error("PEmu: RX FIFO overflow");
+            }
+            rx_fifo_.push_back(regs_[reg]);
+            ++pc_;
+            break;
+        }
+
+        case Op::Pull: {
+            const u32 reg = (ins.operand >> 8) & 0xFu;
+            check_reg_in_range(reg);
+            if (tx_fifo_.empty()) {
+                waiting_for_pull_ = true;
+                pull_reg_ = static_cast<u8>(reg);
+            } else {
+                regs_[reg] = tx_fifo_.front();
+                tx_fifo_.pop_front();
+            }
+            ++pc_;
+            break;
+        }
+
+        case Op::Irq: {
+            const u32 n = (ins.operand >> 8) & 0xFu;
+            irq_lines_ |= static_cast<u16>(1u << n);
+            ++pc_;
+            break;
+        }
     }
 
     ++cycles_;
@@ -198,6 +256,12 @@ std::optional<u8> Core::pop_rx() {
 
 TraceRecord Core::snapshot() const noexcept {
     return TraceRecord{ cycles_, pc_, regs_, pin_out_, pin_oe_ };
+}
+
+void Core::clear_irq(u8 n) noexcept {
+    if (n < kNumIrqLines) {
+        irq_lines_ &= static_cast<u16>(~(1u << n));
+    }
 }
 
 }

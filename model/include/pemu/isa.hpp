@@ -41,6 +41,8 @@ enum class Op : std::uint8_t {
 inline constexpr std::size_t kNumRegs      = 8;
 inline constexpr std::size_t kProgramWords = 128;
 inline constexpr std::size_t kNumPins      = 24;   // 8 ui + 8 uo + 8 uio
+inline constexpr std::size_t kFifoSize     = 16;   // TX and RX bounded FIFO depth
+inline constexpr std::size_t kNumIrqLines  = 16;   // irq_lines_ is a 16-bit bitmask
 
 // Decoded instruction. The 12-bit operand field is preserved raw here;
 // each opcode's execute path slices it up its own way.
@@ -83,6 +85,11 @@ public:
 
     [[nodiscard]] TraceRecord snapshot() const noexcept;
 
+    // Host-visible interrupt lines. Set by the IRQ opcode; the host
+    // (or a cocotb testbench) reads them and clears when serviced.
+    [[nodiscard]] std::uint16_t irq_lines() const noexcept { return irq_lines_; }
+    void                        clear_irq(std::uint8_t n) noexcept;
+
     // Small accessors for unit tests.
     std::uint16_t                                    pc()     const noexcept { return pc_; }
     const std::array<std::uint8_t, kNumRegs>&        regs()   const noexcept { return regs_; }
@@ -103,6 +110,9 @@ private:
     bool                                  wait_forever_{false};
     std::uint8_t                          wait_pin_{};
     std::uint8_t                          wait_val_{};
+    bool                                  waiting_for_pull_{false};
+    std::uint8_t                          pull_reg_{};
+    std::uint16_t                         irq_lines_{};
 };
 
 }

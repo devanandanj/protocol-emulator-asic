@@ -358,6 +358,136 @@ void delay_max_encodable_value() {
     // to the pc_out_of_range test rather than duplicating here.
 }
 
+// JMP
+constexpr std::uint16_t encode_jmp(std::uint16_t addr) {
+    return static_cast<std::uint16_t>(
+        (std::uint16_t{0x7} << 12) | (addr & 0x0FFFu));
+}
+
+void jmp_sets_pc_directly() {
+    // NOP at 0, JMP 0 at 1 -> after two steps PC is back at 0.
+    pemu::Core c({ 0x0000, encode_jmp(0) });
+    c.step();                          // NOP -> pc=1
+    c.step();                          // JMP 0
+    assert(c.snapshot().pc == 0);
+    assert(c.snapshot().cycle == 2);
+}
+
+// JCND
+constexpr std::uint16_t encode_jcnd(std::uint16_t reg, std::uint16_t addr) {
+    return static_cast<std::uint16_t>(
+        (std::uint16_t{0x8} << 12) | ((reg & 0xF) << 8) | (addr & 0xFFu));
+}
+
+void jcnd_branches_when_reg_nonzero_and_decrements() {
+    pemu::Core c({ encode_jcnd(2, 0) });
+    c.set_reg(2, 3);
+    c.step();
+    assert(c.snapshot().pc == 0);      // branched back
+    assert(c.regs()[2] == 2);          // decremented
+}
+
+void jcnd_falls_through_when_reg_zero() {
+    pemu::Core c({ encode_jcnd(2, 5) });
+    c.set_reg(2, 0);
+    c.step();
+    assert(c.snapshot().pc == 1);      // fell through
+    assert(c.regs()[2] == 0);          // NOT decremented below 0
+}
+
+void jcnd_loops_correct_number_of_times() {
+    // Decrement-and-branch classic: r0 starts at 5, loop back to 0
+    // until r0 hits 0. Expect 5 branches + 1 fall-through = 6 steps.
+    pemu::Core c({ encode_jcnd(0, 0), 0x0000 });
+    c.set_reg(0, 5);
+    for (int i = 0; i < 6; ++i) c.step();
+    assert(c.snapshot().pc == 1);
+    assert(c.regs()[0] == 0);
+    assert(c.snapshot().cycle == 6);
+}
+
+// PUSH
+constexpr std::uint16_t encode_push(std::uint16_t reg) {
+    return static_cast<std::uint16_t>(
+        (std::uint16_t{0x9} << 12) | ((reg & 0xF) << 8));
+}
+
+void push_appends_reg_to_rx_fifo() {
+    pemu::Core c({ encode_push(3) });
+    c.set_reg(3, 0x5A);
+    c.step();
+    const auto b = c.pop_rx();
+    assert(b.has_value() && *b == 0x5A);
+    assert(!c.pop_rx().has_value());   // FIFO now empty
+    assert(c.snapshot().pc == 1);
+}
+
+void push_overflow_throws() {
+    // 16 pushes fill the FIFO; the 17th must throw.
+    std::vector<std::uint16_t> prog(17, encode_push(0));
+    pemu::Core c(prog);
+    c.set_reg(0, 0xAA);
+    for (int i = 0; i < 16; ++i) c.step();
+    bool threw = false;
+    try { c.step(); } catch (const std::runtime_error&) { threw = true; }
+    assert(threw);
+}
+
+// PULL
+constexpr std::uint16_t encode_pull(std::uint16_t reg) {
+    return static_cast<std::uint16_t>(
+        (std::uint16_t{0xA} << 12) | ((reg & 0xF) << 8));
+}
+
+void pull_pops_tx_fifo_into_reg() {
+    pemu::Core c({ encode_pull(4) });
+    c.push_tx(0x42);
+    c.step();
+    assert(c.regs()[4] == 0x42);
+    assert(c.snapshot().pc == 1);
+}
+
+void pull_stalls_when_tx_fifo_empty() {
+    // PULL then NOP. FIFO starts empty; host pushes after 6 stall cycles.
+    pemu::Core c({ encode_pull(4), 0x0000 });
+    c.step();                                  // cycle 1: PULL issues, stalls
+    for (int i = 0; i < 5; ++i) c.step();      // cycles 2..6: still stalled
+    assert(c.snapshot().cycle == 6);
+    assert(c.snapshot().pc == 1);              // PC advanced at issue, no further
+    c.push_tx(0x99);                           // host provides data
+    c.step();                                  // cycle 7: pull completes
+    assert(c.regs()[4] == 0x99);
+    c.step();                                  // cycle 8: NOP fetches
+    assert(c.snapshot().pc == 2);
+    assert(c.snapshot().cycle == 8);
+}
+
+// IRQ
+constexpr std::uint16_t encode_irq(std::uint16_t n) {
+    return static_cast<std::uint16_t>(
+        (std::uint16_t{0xB} << 12) | ((n & 0xF) << 8));
+}
+
+void irq_sets_bit_in_irq_lines() {
+    pemu::Core c({ encode_irq(3) });
+    c.step();
+    assert(c.irq_lines() == (1u << 3));
+    assert(c.snapshot().pc == 1);
+}
+
+void irq_lines_accumulate_and_can_be_cleared() {
+    pemu::Core c({ encode_irq(1), encode_irq(4) });
+    c.run(2);
+    assert(c.irq_lines() == ((1u << 1) | (1u << 4)));
+    c.clear_irq(1);
+    assert(c.irq_lines() == (1u << 4));
+    c.clear_irq(4);
+    assert(c.irq_lines() == 0);
+    // Clearing an out-of-range line is a silent no-op.
+    c.clear_irq(200);
+    assert(c.irq_lines() == 0);
+}
+
 
 } // namespace
 
@@ -400,6 +530,21 @@ int main() {
     wait_exits_early_when_pin_matches_mid_stall();
     wait_forever_with_timeout_zero_never_times_out();
     wait_releases_oe_on_pin_at_issue();
+    // JMP
+    jmp_sets_pc_directly();
+    // JCND
+    jcnd_branches_when_reg_nonzero_and_decrements();
+    jcnd_falls_through_when_reg_zero();
+    jcnd_loops_correct_number_of_times();
+    // PUSH
+    push_appends_reg_to_rx_fifo();
+    push_overflow_throws();
+    // PULL
+    pull_pops_tx_fifo_into_reg();
+    pull_stalls_when_tx_fifo_empty();
+    // IRQ
+    irq_sets_bit_in_irq_lines();
+    irq_lines_accumulate_and_can_be_cleared();
 
     std::cout << "pemu_model_tests: all tests passed\n";
     return 0;
