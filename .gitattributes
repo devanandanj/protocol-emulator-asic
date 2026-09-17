@@ -1,0 +1,39 @@
+# Enforce LF everywhere for text files, regardless of the host OS.
+# Prevents "every file is modified" churn when the repo is opened
+# alternately on Windows and inside a Linux dev container.
+*                text=auto eol=lf
+
+# Explicit text (in case detection guesses wrong)
+*.v              text eol=lf
+*.sv             text eol=lf
+*.vh             text eol=lf
+*.svh            text eol=lf
+*.cpp            text eol=lf
+*.hpp            text eol=lf
+*.c              text eol=lf
+*.h              text eol=lf
+*.py             text eol=lf
+*.pemu           text eol=lf
+*.hex            text eol=lf
+*.tsv            text eol=lf
+*.md             text eol=lf
+*.yaml           text eol=lf
+*.yml            text eol=lf
+*.json           text eol=lf
+*.txt            text eol=lf
+*.sh             text eol=lf
+*.cmake          text eol=lf
+Makefile         text eol=lf
+CMakeLists.txt   text eol=lf
+
+# Explicit binaries — never touch these
+*.png            binary
+*.jpg            binary
+*.jpeg           binary
+*.gif            binary
+*.pdf            binary
+*.zip            binary
+*.gds            binary
+*.gz             binary
+*.fst            binary
+*.vvp            binary
