@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles, RisingEdge, ReadOnly
+from cocotb.triggers import ClockCycles, RisingEdge, ReadOnly, NextTimeStep
 
 
 @cocotb.test()
@@ -113,6 +113,67 @@ async def test_step3(dut):
     await RisingEdge(dut.clk); await ReadOnly()
     assert int(pc.value) == 14
 
-    # cycle 24: JMP 0 executes — wrap back.
+    core = dut.user_project.core
+
+    # cycle 24: LDI r5, 0xAA
+    await RisingEdge(dut.clk); await ReadOnly()
+    assert int(pc.value) == 15
+    assert int(regs[5].value) == 0xAA
+
+    # cycle 25: PUSH r5 → rx_fifo[0]=0xAA, rx_count=1
+    await RisingEdge(dut.clk); await ReadOnly()
+    assert int(pc.value) == 16
+    assert int(core.rx_count.value) == 1
+    assert int(core.rx_fifo[0].value) == 0xAA
+
+    # cycle 26: IRQ 3 → irq_lines bit 3 set
+    await RisingEdge(dut.clk); await ReadOnly()
+    assert int(pc.value) == 17
+    assert int(core.irq_lines.value) & (1 << 3)
+
+    # cycle 27: LDI r7, 1
+    await RisingEdge(dut.clk); await ReadOnly()
+    assert int(pc.value) == 18
+    assert int(regs[7].value) == 1
+
+    # cycle 28: OUT_OD pin 5, r7  (bit=1 → release pin 5)
+    await RisingEdge(dut.clk); await ReadOnly()
+    assert int(pc.value) == 19
+    assert (int(uio_oe.value) >> 5) & 1 == 0
+
+    # cycle 29: LDI r7, 0
+    await RisingEdge(dut.clk); await ReadOnly()
+    assert int(pc.value) == 20
+    assert int(regs[7].value) == 0
+
+    # cycle 30: OUT_OD pin 5, r7  (bit=0 → drive pin 5 low)
+    await RisingEdge(dut.clk); await ReadOnly()
+    assert int(pc.value) == 21
+    assert (int(uio_out.value) >> 5) & 1 == 0
+    assert (int(uio_oe.value)  >> 5) & 1 == 1
+
+    # cycle 31: PULL r6 — TX FIFO empty, enters stall
+    await RisingEdge(dut.clk); await ReadOnly()
+    assert int(pc.value) == 22
+    assert int(core.waiting_for_pull.value) == 1
+
+    # cycle 32: still stalling
+    await RisingEdge(dut.clk); await ReadOnly()
+    assert int(pc.value) == 22
+    assert int(core.waiting_for_pull.value) == 1
+
+    # Leave ReadOnly phase so we can write to signals (backdoor host push).
+    await NextTimeStep()
+    core.tx_fifo[0].value = 0xBE
+    core.tx_tail.value = 1
+    core.tx_count.value = 1
+
+    # cycle 33: PULL stall service loads r6 = 0xBE, clears wait
+    await RisingEdge(dut.clk); await ReadOnly()
+    assert int(pc.value) == 22
+    assert int(regs[6].value) == 0xBE
+    assert int(core.waiting_for_pull.value) == 0
+
+    # cycle 34: JMP 0 executes — wrap back
     await RisingEdge(dut.clk); await ReadOnly()
     assert int(pc.value) == 0
