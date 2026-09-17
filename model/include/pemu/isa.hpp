@@ -79,6 +79,7 @@ public:
 
     // For directly injecting input-pin state from tests.
     void set_pin_in(std::uint32_t bits) noexcept { pin_in_ = bits & 0x00FFFFFFu; }
+    void set_reg(std::size_t idx, std::uint8_t val);
 
     [[nodiscard]] TraceRecord snapshot() const noexcept;
 

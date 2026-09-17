@@ -2,7 +2,7 @@
 
 Status: **sketch, not frozen**. This document exists so Phase 1 has
 somewhere to accumulate decisions instead of scattering them across
-issues. Everything here is negotiable until the Python model
+issues. Everything here is negotiable until the C++ model
 successfully executes UART, SPI, and I²C programs.
 
 ## Design goals
@@ -39,8 +39,8 @@ they explicitly wait.
 | Mnemonic     | 4-bit op | Operand fields                       | Effect                                                 |
 |--------------|:--------:|--------------------------------------|--------------------------------------------------------|
 | `NOP`        | 0x0      | —                                    | Consume 1 cycle (for padding fixed-duration bit slots) |
-| `SET pin,v`  | 0x1      | pin[3:0], val[7:0]                   | Drive `pin` to `val` (immediate)                       |
-| `OUT pin,r`  | 0x2      | pin[3:0], reg[3:0]                   | Drive `pin` from register `r` bit 0                    |
+| `SET pin,v`  | 0x1      | pin[11:8], val[7:0]                  | Drive `pin` to `val[0]`; assert OE on `pin`            |
+| `OUT pin,r`  | 0x2      | pin[11:8], reg[7:4]                  | Drive `pin` from `regs[r] & 1`; assert OE on `pin`     |
 | `SHIFT r,d`  | 0x3      | reg[3:0], dir[0], count[3:0]         | Shift register left/right by `count`                   |
 | `IN pin,r`   | 0x4      | pin[3:0], reg[3:0]                   | Sample `pin` into `r` bit 0                            |
 | `WAIT pin,v` | 0x5      | pin[3:0], val[0], timeout[6:0]       | Block until `pin==val` or `timeout` cycles elapse      |
@@ -50,6 +50,28 @@ they explicitly wait.
 | `PUSH r`     | 0x9      | reg[3:0]                             | Push register to host RX FIFO                          |
 | `PULL r`     | 0xA      | reg[3:0]                             | Pop from host TX FIFO into register                    |
 | `IRQ n`      | 0xB      | irq[3:0]                             | Raise IRQ line `n` to host                             |
+
+
+### SET encoding detail
+
+- `pin` is a 4-bit index (0–15). Physical mapping to the 24 chip pins
+  is a Phase 2 concern; the model treats pin index `i` as bit `i` of an
+  internal 24-bit `pin_out`/`pin_oe` register pair.
+- `val[0]` is the value driven. `val[7:1]` are reserved (an extension
+  could reuse them to set 8 adjacent pins at once, RP2040-PIO-style).
+- SET also asserts the output enable on that pin. There is no matching
+  "release" opcode yet — needed for open-drain I²C. Track as an open
+  question below.
+
+### OUT encoding detail
+
+- `pin` is a 4-bit index (0–15), same as SET.
+- `reg` is a 4-bit field but only values 0–7 name real registers;
+  8–15 are invalid and the model throws. Every future opcode that
+  reads or writes a register shares this convention.
+- Only `regs[r]` bit 0 is used. To drive a higher bit of a register
+  onto a pin, use `SHIFT` to bring that bit down to bit 0 first —
+  this is exactly how UART TX iterates through a byte.
 
 **Open questions to resolve during Phase 1:**
 
@@ -63,6 +85,9 @@ they explicitly wait.
 - How does the host load programs? Options: (a) shift-in via a
   dedicated bidir pin at boot, (b) SPI-slave loader block, (c)
   memory-mapped via a wider host interface. (a) is cheapest.
+- SET always asserts OE. I²C's open-drain SDA needs a way to *release*
+  a pin (OE=0). Add a `RELEASE pin` opcode, or make SET encode OE as a
+  distinct bit, or use a separate mode register?
 
 ## Programming model examples (sketch — will move to `model/programs/`)
 

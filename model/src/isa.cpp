@@ -3,6 +3,14 @@
 #include <stdexcept>
 #include <utility>
 
+namespace {
+    void check_reg_in_range(std::uint32_t r) {
+        if (r >= pemu::kNumRegs) {
+            throw std::runtime_error("PEmu: Register index out of range");
+        }
+    }
+}
+
 namespace pemu {
 
 Core::Core(std::vector<std::uint16_t> program) noexcept
@@ -33,11 +41,32 @@ void Core::step() {
             ++pc_;
             break;
 
-        // TODO(phase 1): implement the rest of the ISA.
         // Each case here should update pin_out_/pin_oe_/regs_/pc_/FIFOs
         // according to docs/isa.md, then fall through to cycles_++.
-        case Op::Set:
-        case Op::Out:
+        case Op::Set: {
+            const std::uint32_t pin = (ins.operand >> 8) & 0xFu;
+            const std::uint32_t val =  ins.operand       & 0x1u;
+            const std::uint32_t mask = std::uint32_t{1} << pin;
+            if (val) pin_out_ |= mask;
+            else     pin_out_ &= ~mask;
+            pin_oe_ |= mask;
+            ++pc_;
+            break;
+        }
+        case Op::Out: {
+            const std::uint32_t pin = (ins.operand >> 8) & 0xFu;
+            const std::uint32_t reg = (ins.operand >> 4) & 0xFu;
+            check_reg_in_range(reg);
+            const std::uint32_t bit = regs_[reg] & 0x1u;
+            const std::uint32_t mask = std::uint32_t{1} << pin;
+            if (bit) pin_out_ |= mask;
+            else     pin_out_ &= ~mask;
+            pin_oe_ |= mask;
+            ++pc_;
+            break;
+        }
+
+        // Todo:
         case Op::Shift:
         case Op::In:
         case Op::Wait:
@@ -47,7 +76,7 @@ void Core::step() {
         case Op::Push:
         case Op::Pull:
         case Op::Irq:
-            throw std::runtime_error("PEmu: opcode not yet implemented (Phase 1 TODO)");
+            throw std::runtime_error("PEmu: opcode not yet implemented");
     }
 
     ++cycles_;
@@ -57,6 +86,13 @@ void Core::run(std::size_t max_cycles) {
     for (std::size_t i = 0; i < max_cycles; ++i) {
         step();
     }
+}
+
+void Core::set_reg(std::size_t idx, std::uint8_t val) {
+    if (idx >= kNumRegs) {
+        throw std::runtime_error("PEmu::set_reg: register index out of range");
+    }
+    regs_[idx] = val;
 }
 
 void Core::push_tx(std::uint8_t byte) {
@@ -74,4 +110,4 @@ TraceRecord Core::snapshot() const noexcept {
     return TraceRecord{ cycles_, pc_, regs_, pin_out_, pin_oe_ };
 }
 
-} // namespace pemu
+}
