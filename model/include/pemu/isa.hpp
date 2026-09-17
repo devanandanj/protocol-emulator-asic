@@ -36,6 +36,7 @@ enum class Op : std::uint8_t {
     Push  = 0x9,
     Pull  = 0xA,
     Irq   = 0xB,
+    Ldi   = 0xC,   // load immediate into register
 };
 
 inline constexpr std::size_t kNumRegs      = 8;

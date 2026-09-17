@@ -225,6 +225,15 @@ void Core::step() {
             ++pc_;
             break;
         }
+
+        case Op::Ldi: {
+            const u32 reg = (ins.operand >> 8) & 0xFu;
+            const u32 imm =  ins.operand       & 0xFFu;
+            check_reg_in_range(reg);
+            regs_[reg] = static_cast<u8>(imm);
+            ++pc_;
+            break;
+        }
     }
 
     ++cycles_;

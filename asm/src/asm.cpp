@@ -301,6 +301,14 @@ u16 encode_irq(const std::vector<std::string>& ops) {
     return static_cast<u16>((u16{0xB} << 12) | (n << 8));
 }
 
+u16 encode_ldi(const std::vector<std::string>& ops) {
+    require_operand_count(ops, 2, "LDI", "reg, imm");
+    const u32 reg = parse_register(ops[0]);
+    const u32 imm = parse_number(ops[1]);
+    require_range(imm, 0xFF, "LDI imm");
+    return static_cast<u16>((u16{0xC} << 12) | (reg << 8) | imm);
+}
+
 }  // namespace
 
 // -----------------------------------------------------------------
@@ -359,6 +367,7 @@ AssembleResult assemble(std::istream& in) {
             else if (m == "push")  word = encode_push (line.operands);
             else if (m == "pull")  word = encode_pull (line.operands);
             else if (m == "irq")   word = encode_irq  (line.operands);
+            else if (m == "ldi")   word = encode_ldi  (line.operands);
             else throw std::runtime_error("unknown mnemonic '" + m + "'");
             r.words.push_back(word);
         } catch (const std::exception& e) {

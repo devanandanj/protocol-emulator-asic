@@ -126,6 +126,18 @@ void irq_encoding() {
     assert(r.words[0] == 0xB700);
 }
 
+void ldi_encoding() {
+    auto r = asm_str("ldi r3, 0x5A");
+    assert(r.ok() && r.words.size() == 1);
+    assert(r.words[0] == 0xC35A);
+}
+
+void ldi_imm_out_of_range_reports_error() {
+    auto r = asm_str("ldi r0, 256");
+    assert(!r.ok());
+    assert(r.errors[0].find("LDI imm") != std::string::npos);
+}
+
 // -----------------------------------------------------------------
 // Error cases
 // -----------------------------------------------------------------
@@ -197,6 +209,8 @@ int main() {
     jcnd_addr_out_of_range_reports_error();
     push_pull_encoding();
     irq_encoding();
+    ldi_encoding();
+    ldi_imm_out_of_range_reports_error();
     // error cases
     register_out_of_range_reports_error();
     wrong_operand_count_reports_error();

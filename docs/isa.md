@@ -50,6 +50,7 @@ they explicitly wait.
 | `PUSH r`     | 0x9      | reg[11:8]                            | Append `regs[r]` to RX FIFO (host reads); throw if full. |
 | `PULL r`     | 0xA      | reg[11:8]                            | Pop TX FIFO into `regs[r]`; stall until non-empty.     |
 | `IRQ n`      | 0xB      | irq[11:8]                            | Set bit `n` of host-visible `irq_lines` (level, host clears). |
+| `LDI r,imm`  | 0xC      | reg[11:8], imm[7:0]                  | `regs[r] = imm`. Load 8-bit immediate into register.   |
 
 
 ### SET encoding detail
@@ -196,6 +197,19 @@ they explicitly wait.
 - Programs typically raise IRQ to signal "byte ready in RX FIFO"
   or "protocol error"; cocotb tests block until a specific bit
   goes high, then service and clear.
+
+### LDI encoding detail
+
+- `reg` at [11:8], `imm` at [7:0]. Full 8-bit immediate.
+- `regs[r] = imm`, 1 cycle. Overwrites any previous value.
+- Added late in the ISA-design pass — the original v0.1 sketch
+  assumed every register value would arrive via PULL (from host)
+  or IN (from a pin). That works for real protocol operation,
+  but makes it painful to write standalone smoke tests where the
+  program should be self-sufficient. LDI plugs that gap without
+  changing anything about how PULL/IN behave.
+- Assembler: `ldi r0, 0x5A` — accepts decimal, `0x`-hex, or `0b`-
+  binary immediates.
 
 **Open questions to resolve during Phase 1:**
 

@@ -488,6 +488,33 @@ void irq_lines_accumulate_and_can_be_cleared() {
     assert(c.irq_lines() == 0);
 }
 
+// LDI
+constexpr std::uint16_t encode_ldi(std::uint16_t reg, std::uint16_t imm) {
+    return static_cast<std::uint16_t>(
+        (std::uint16_t{0xC} << 12) | ((reg & 0xF) << 8) | (imm & 0xFFu));
+}
+
+void ldi_loads_immediate_into_register() {
+    pemu::Core c({ encode_ldi(3, 0x5A) });
+    c.step();
+    assert(c.regs()[3] == 0x5A);
+    assert(c.snapshot().pc == 1);
+    assert(c.snapshot().cycle == 1);
+}
+
+void ldi_overwrites_previous_value() {
+    pemu::Core c({ encode_ldi(0, 0xAA), encode_ldi(0, 0x55) });
+    c.run(2);
+    assert(c.regs()[0] == 0x55);
+}
+
+void ldi_invalid_register_throws() {
+    pemu::Core c({ encode_ldi(8, 0) });    // reg 8 doesn't exist
+    bool threw = false;
+    try { c.step(); } catch (const std::runtime_error&) { threw = true; }
+    assert(threw);
+}
+
 
 } // namespace
 
@@ -545,6 +572,10 @@ int main() {
     // IRQ
     irq_sets_bit_in_irq_lines();
     irq_lines_accumulate_and_can_be_cleared();
+    // LDI
+    ldi_loads_immediate_into_register();
+    ldi_overwrites_previous_value();
+    ldi_invalid_register_throws();
 
     std::cout << "pemu_model_tests: all tests passed\n";
     return 0;
