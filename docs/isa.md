@@ -52,6 +52,7 @@ they explicitly wait.
 | `IRQ n`      | 0xB      | irq[11:8]                            | Set bit `n` of host-visible `irq_lines` (level, host clears). |
 | `LDI r,imm`  | 0xC      | reg[11:8], imm[7:0]                  | `regs[r] = imm`. Load 8-bit immediate into register.   |
 | `ROT r,d,c`  | 0xD      | reg[11:8], dir[7], count[3:0]        | Rotate `regs[r]` by `c mod 8` positions. dir=0 left, dir=1 right. |
+| `OUT_OD p,r` | 0xE      | pin[11:8], reg[7:4]                  | Open-drain drive: bit0=0 drives `pin` low (OE=1), bit0=1 releases (OE=0). |
 
 
 ### SET encoding detail

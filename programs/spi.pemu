@@ -1,0 +1,43 @@
+; SPI Master, Mode 0 (CPOL=0, CPHA=0), MSB first, 8 bits.
+;
+; Pins:
+;   Pin 0 = SCK  (master output; idle low)
+;   Pin 1 = MOSI (master output)
+;   Pin 2 = MISO (master input)
+;
+; 1 MHz SCK on 50 MHz core clock = 50 cycles per SCK period.
+; 50% duty: 25 cycles high, 25 cycles low.
+;
+; Registers:
+;   r0 = TX byte (ROT L 1 before each OUT brings the current MSB to bit 0)
+;   r1 = RX byte (SHIFT L 1 then IN accumulates MSB-first into bits [7:0])
+;   r2 = bit counter (init 7; JCND runs the body 8 times)
+;
+; Bit-slot budget (must total 50 cycles):
+;   shift (1) + rot (1) + out (1) + delay 20 (20)  = 23 cycles, SCK low
+;   set   (1) + in  (1) + delay 23 (23)            = 25 cycles, SCK high
+;   set   (1) + jcnd (1)                            =  2 cycles, low again
+;   Total = 50 cycles.
+;
+; MSB-first assembly of r1 relies on SHIFT-then-IN so the first sample
+; (bit 7) ends up at position 7 by the time the loop finishes.
+
+start:  set   0, 0             ; SCK idle low, OE asserted
+        set   1, 0             ; MOSI low, OE asserted
+        pull  r0                ; block for TX byte from host
+        ldi   r1, 0             ; clear RX accumulator
+        ldi   r2, 7             ; 8-bit counter
+
+bit:    shift r1, left, 1       ; slide RX up (MSB-first accumulation)
+        rot   r0, left, 1       ; bring TX MSB to bit 0
+        out   1, r0             ; drive MOSI from bit 0
+        delay 20                ; hold MOSI stable while SCK still low
+        set   0, 1              ; SCK rising edge -> slave samples MOSI
+        in    2, r1             ; master samples MISO on rising edge (Mode 0)
+        delay 23                ; hold SCK high
+        set   0, 0              ; SCK falling edge
+        jcnd  r2, bit           ; loop for 8 bits
+
+        push  r1                ; deliver received byte to host RX FIFO
+        irq   0                 ; signal byte-available
+        jmp   start

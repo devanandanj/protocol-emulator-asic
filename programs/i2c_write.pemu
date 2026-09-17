@@ -1,0 +1,85 @@
+; I2C Master, single-byte write with ACK check.
+; ~500 kHz-ish SCL on 50 MHz core clock (87 cycles/SCL period).
+;
+; Pins:
+;   Pin 3 = SDA  (open-drain, external pullup)
+;   Pin 4 = SCL  (open-drain, external pullup)
+;
+; Convention (open-drain): drive low = master pulls line down; release
+; = master lets line float, external pullup brings it high (unless
+; a slave is holding it low). OUT_OD encodes both: bit=0 drives low,
+; bit=1 releases.
+;
+; Transaction shape:
+;   START -> 8 bits (MSB first) -> read slave ACK bit -> STOP
+;
+; Host provides the byte to send via TX FIFO (--tx=...). Master delivers
+; the received ACK bit (0=ACK, 1=NAK) via RX FIFO + IRQ.
+;
+; Registers:
+;   r0 = TX byte being clocked out
+;   r1 = bit counter (init 7)
+;   r2 = ACK bit read from slave (bit 0)
+;   r7 = constant '1' for OUT_OD "release" invocations
+;
+; Bit-slot budget per SCL cycle (87 cycles total):
+;   rot(1) + out_od(1) + delay 20(20)              -> SDA drive + setup
+;   out_od(1) + wait(1) + delay 40(40)             -> SCL rising, high phase
+;   set(1)   + delay 20(20)                        -> SCL falling, low
+;   jcnd(1)                                        -> loop
+;   sum = 87
+
+    ldi   r7, 1                     ; scratch: '1' for releases
+
+    ; ---- bus idle: both lines released ----
+    out_od 3, r7                    ; SDA released (pullup high)
+    out_od 4, r7                    ; SCL released (pullup high)
+    delay 50
+
+    ; ---- START: SDA falls while SCL is high ----
+    set   3, 0                      ; drive SDA low  (SDA falls, SCL still high = START)
+    delay 25                        ; tHD;STA
+    set   4, 0                      ; drive SCL low  (setup for clocking bits)
+    delay 25
+
+    ; ---- pull address+W byte from host ----
+    pull  r0                        ; e.g. host provides 0xA0 = addr 0x50 + W
+    ldi   r1, 7                     ; 8-bit counter
+
+send_bit:
+    rot   r0, left, 1               ; bring current MSB to bit 0
+    out_od 3, r0                    ; drive SDA open-drain from bit 0
+    delay 20                        ; SDA setup while SCL is low
+    out_od 4, r7                    ; release SCL (rising edge)
+    wait  4, 1, 0                   ; handle clock stretching (no-op if not stretched)
+    delay 40                        ; hold SCL high (slave samples MOSI)
+    set   4, 0                      ; drive SCL low (falling edge)
+    delay 20                        ; hold SCL low
+    jcnd  r1, send_bit              ; loop for all 8 bits
+
+    ; ---- 9th SCL cycle: read ACK from slave ----
+    out_od 3, r7                    ; release SDA (slave will drive it)
+    delay 20
+    out_od 4, r7                    ; release SCL (rising edge)
+    wait  4, 1, 0                   ; clock stretching
+    delay 15
+    in    3, r2                     ; sample SDA: bit 0 = 0 (ACK) or 1 (NAK)
+    delay 15
+    set   4, 0                      ; drive SCL low
+    delay 20
+
+    ; ---- STOP: SDA rises while SCL is high ----
+    set   3, 0                      ; ensure SDA held low
+    delay 20
+    out_od 4, r7                    ; release SCL (rising)
+    wait  4, 1, 0
+    delay 30
+    out_od 3, r7                    ; release SDA (rising while SCL high = STOP)
+    delay 50
+
+    ; ---- report ----
+    push  r2                        ; deliver ACK bit to host RX FIFO
+    irq   0                         ; signal "transaction done"
+
+halt:
+    jmp   halt                      ; park the program

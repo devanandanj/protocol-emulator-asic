@@ -235,6 +235,22 @@ void Core::step() {
             break;
         }
 
+        case Op::OutOd: {
+            const u32 pin  = (ins.operand >> 8) & 0xFu;
+            const u32 reg  = (ins.operand >> 4) & 0xFu;
+            check_reg_in_range(reg);
+            const u32 mask = u32{1} << pin;
+            const u32 bit  = regs_[reg] & 0x1u;
+            if (bit == 0u) {
+                pin_out_ &= ~mask;   // drive low
+                pin_oe_  |=  mask;
+            } else {
+                pin_oe_  &= ~mask;   // release (external pullup brings line high)
+            }
+            ++pc_;
+            break;
+        }
+
         case Op::Rot: {
             const u32 reg = (ins.operand >> 8) & 0xFu;
             const u32 dir = (ins.operand >> 7) & 0x1u;

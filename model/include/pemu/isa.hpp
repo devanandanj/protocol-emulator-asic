@@ -38,6 +38,7 @@ enum class Op : std::uint8_t {
     Irq   = 0xB,
     Ldi   = 0xC,   // load immediate into register
     Rot   = 0xD,   // Rotate Shift Register
+    OutOd = 0xE,   // open-drain drive from register (I2C SDA/SCL)
 };
 
 inline constexpr std::size_t kNumRegs      = 8;

@@ -318,6 +318,14 @@ u16 encode_rot(const std::vector<std::string>& ops) {
     return static_cast<u16>((u16{0xD} << 12) | (reg << 8) | (dir << 7) | count);
 }
 
+u16 encode_out_od(const std::vector<std::string>& ops) {
+    require_operand_count(ops, 2, "OUT_OD", "pin, reg");
+    const u32 pin = parse_number(ops[0]);
+    const u32 reg = parse_register(ops[1]);
+    require_range(pin, 0xF, "OUT_OD pin");
+    return static_cast<u16>((u16{0xE} << 12) | (pin << 8) | (reg << 4));
+}
+
 }  // namespace
 
 // -----------------------------------------------------------------
@@ -378,6 +386,7 @@ AssembleResult assemble(std::istream& in) {
             else if (m == "irq")   word = encode_irq  (line.operands);
             else if (m == "ldi")   word = encode_ldi  (line.operands);
             else if (m == "rot")   word = encode_rot  (line.operands);
+            else if (m == "out_od") word = encode_out_od(line.operands);
             else throw std::runtime_error("unknown mnemonic '" + m + "'");
             r.words.push_back(word);
         } catch (const std::exception& e) {

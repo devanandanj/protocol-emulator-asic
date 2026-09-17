@@ -565,6 +565,37 @@ void rot_by_eight_is_full_rotation_noop() {
     assert(c.regs()[0] == 0x5A);   // 8 mod 8 = 0
 }
 
+// OUT_OD
+constexpr std::uint16_t encode_out_od(std::uint16_t pin, std::uint16_t reg) {
+    return static_cast<std::uint16_t>(
+        (std::uint16_t{0xE} << 12) | ((pin & 0xF) << 8) | ((reg & 0xF) << 4));
+}
+
+void out_od_bit_zero_drives_line_low_and_asserts_oe() {
+    pemu::Core c({ encode_out_od(3, 2) });
+    c.set_reg(2, 0x00);
+    c.step();
+    const auto s = c.snapshot();
+    assert((s.pin_out & (1u << 3)) == 0);
+    assert( s.pin_oe  & (1u << 3));
+}
+
+void out_od_bit_one_releases_oe() {
+    // First SET drives pin 3 high (OE asserted). Then OUT_OD with bit=1
+    // should release (OE=0), letting an external pullup take over.
+    pemu::Core c({ encode_set(3, 1), encode_out_od(3, 2) });
+    c.set_reg(2, 0x01);
+    c.run(2);
+    assert((c.snapshot().pin_oe & (1u << 3)) == 0);
+}
+
+void out_od_invalid_register_throws() {
+    pemu::Core c({ encode_out_od(0, 8) });
+    bool threw = false;
+    try { c.step(); } catch (const std::runtime_error&) { threw = true; }
+    assert(threw);
+}
+
 
 } // namespace
 
@@ -632,6 +663,10 @@ int main() {
     rot_right_2_moves_bits_correctly();
     rot_by_zero_is_noop_but_advances_state();
     rot_by_eight_is_full_rotation_noop();
+    // OUT_OD
+    out_od_bit_zero_drives_line_low_and_asserts_oe();
+    out_od_bit_one_releases_oe();
+    out_od_invalid_register_throws();
 
     std::cout << "pemu_model_tests: all tests passed\n";
     return 0;

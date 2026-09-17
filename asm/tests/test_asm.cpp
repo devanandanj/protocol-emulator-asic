@@ -138,6 +138,13 @@ void ldi_imm_out_of_range_reports_error() {
     assert(r.errors[0].find("LDI imm") != std::string::npos);
 }
 
+void out_od_encoding() {
+    auto r = asm_str("out_od 3, r2");
+    assert(r.ok() && r.words.size() == 1);
+    // op=E, pin=3, reg=2 -> 0xE320
+    assert(r.words[0] == 0xE320);
+}
+
 void rot_encoding() {
     auto r = asm_str("rot r0, right, 1");
     assert(r.ok() && r.words.size() == 1);
@@ -218,6 +225,7 @@ int main() {
     irq_encoding();
     ldi_encoding();
     ldi_imm_out_of_range_reports_error();
+    out_od_encoding();
     // error cases
     register_out_of_range_reports_error();
     wrong_operand_count_reports_error();
