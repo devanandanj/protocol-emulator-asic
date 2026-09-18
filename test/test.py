@@ -350,6 +350,9 @@ async def _run_protocol(dut, name, hex_path, cycles,
     for i in range(cycles):
         cyc = i + 1
         if cyc in events:
+            # Prior iter's `await ReadOnly()` leaves us in the ReadOnly phase;
+            # step out before writing signals.
+            await NextTimeStep()
             dut.uio_in.value = events[cyc] & 0xFF
         await RisingEdge(dut.clk)
         await ReadOnly()
@@ -374,11 +377,26 @@ async def _run_protocol(dut, name, hex_path, cycles,
     dut._log.info(f"{name}: {cycles} cycles match")
 
 
+def _uart_rx_events(byte, start_cycle=10, bit_period=434, rx_pin=3):
+    """Schedule pin_in transitions for one 8N1 UART frame on rx_pin.
+
+    Idle high at cycle 0, start bit (low) at start_cycle, then 8 data bits
+    LSB-first spaced bit_period apart, then a stop bit (high).
+    """
+    idle = 1 << rx_pin
+    events = [(0, idle), (start_cycle, 0)]
+    for i in range(8):
+        bit = (byte >> i) & 1
+        events.append((start_cycle + bit_period * (i + 1), idle if bit else 0))
+    events.append((start_cycle + bit_period * 9, idle))
+    return events
+
 # Protocol configs: (name, hex-file, cycles, tx-bytes, pin-events)
 _PROTOCOLS = [
-    ("uart_tx",   _REPO_ROOT / "programs" / "uart_tx.hex",   500, [0x55], None),
-    ("spi",       _REPO_ROOT / "programs" / "spi.hex",       400, [0xA5], None),
+    ("uart_tx",   _REPO_ROOT / "programs" / "uart_tx.hex",    500, [0x55], None),
+    ("spi",       _REPO_ROOT / "programs" / "spi.hex",        400, [0xA5], None),
     ("i2c_write", _REPO_ROOT / "programs" / "i2c_write.hex", 1000, [0xA0], [(0, 0x18)]),
+    ("uart_rx",   _REPO_ROOT / "programs" / "uart_rx.hex",   4400, None,   _uart_rx_events(0x55)),
 ]
 
 
