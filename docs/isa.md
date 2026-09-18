@@ -1,9 +1,9 @@
-# PEmu ISA — Working Draft (Phase 1 seed)
+# PEmu ISA
 
-Status: **sketch, not frozen**. This document exists so Phase 1 has
-somewhere to accumulate decisions instead of scattering them across
-issues. Everything here is negotiable until the C++ model
-successfully executes UART, SPI, and I²C programs.
+Status: **frozen for v1**. The 15-opcode set below is what the RTL,
+the C++ model, and all four shipped protocol programs (`uart_tx`,
+`uart_rx`, `spi`, `i2c_write`) run against. The verification harness
+diffs RTL and model cycle-for-cycle on every one of them.
 
 ## Design goals
 
@@ -57,14 +57,14 @@ they explicitly wait.
 
 ### SET encoding detail
 
-- `pin` is a 4-bit index (0–15). Physical mapping to the 24 chip pins
-  is a Phase 2 concern; the model treats pin index `i` as bit `i` of an
-  internal 24-bit `pin_out`/`pin_oe` register pair.
+- `pin` is a 4-bit field at [11:8]. On the shipped chip only pins 0–7
+  are wired (RTL slices `operand[10:8]`), so bit [11] is
+  reserved-must-be-zero. Programs encoded for pins ≥ 8 will silently
+  alias.
 - `val[0]` is the value driven. `val[7:1]` are reserved (an extension
   could reuse them to set 8 adjacent pins at once, RP2040-PIO-style).
-- SET also asserts the output enable on that pin. There is no matching
-  "release" opcode yet — needed for open-drain I²C. Track as an open
-  question below.
+- SET also asserts the output enable on that pin. Open-drain
+  operation lives in the `OUT_OD` opcode; SET is push-pull.
 
 ### OUT encoding detail
 
@@ -222,21 +222,24 @@ they explicitly wait.
   can assemble bytes in natural memory order via `IN + ROT r, right, 1`.
   Without it, sample-and-shift produces bit-reversed bytes.
 
-**Open questions to resolve during Phase 1:**
+**Design questions closed during v1 hardening:**
 
-- Do we need one shift register or two? (SPI needs simultaneous TX
-  and RX shifting.)
-- Is 16 pins (4-bit pin field) enough? TT gives us 8 inputs + 8
-  outputs + 8 bidir = 24 pins, so we may want 5-bit pin fields.
-- Clock divider: fixed 8-bit prescaler shared by all instructions,
-  or per-instruction override? RP2040 uses a fractional divider —
-  probably overkill for our area budget.
-- How does the host load programs? Options: (a) shift-in via a
-  dedicated bidir pin at boot, (b) SPI-slave loader block, (c)
-  memory-mapped via a wider host interface. (a) is cheapest.
-- SET always asserts OE. I²C's open-drain SDA needs a way to *release*
-  a pin (OE=0). Add a `RELEASE pin` opcode, or make SET encode OE as a
-  distinct bit, or use a separate mode register?
+- **Shift register count** — one general-purpose register file (8 × 8) is
+  enough. SPI's simultaneous TX/RX shift uses two separate registers
+  (`r0` shifts TX left, `r1` accumulates RX MSB-first); the cost is one
+  extra instruction per bit and it fits in the 50-cycle SCK slot.
+- **Pin field width** — kept at 4 bits in the encoding, but the chip only
+  wires pins 0–7 (RTL slices `operand[10:8]`, bit [11] reserved). Room
+  for a v2 that grows to 16 pins by widening `pin_out`/`pin_oe`.
+- **Clock divider** — no dedicated prescaler. `DELAY` covers every
+  timing budget we care about, saves a shared piece of state, and keeps
+  each program self-contained about its own cycle math.
+- **Loader path** — bootstrap on `ui[0..2]` + `uio_in[7:0]` while
+  `rst_n=0` (see `architecture.md`). Two-byte writes per instruction,
+  auto-incrementing address.
+- **Open-drain drive** — `OUT_OD` opcode (0xE). Bit 0 == 0 drives low
+  (OE=1); bit 0 == 1 releases (OE=0). Matches I²C SDA/SCL semantics
+  without a separate mode register.
 
 ## Programming model examples (sketch — will move to `model/programs/`)
 
