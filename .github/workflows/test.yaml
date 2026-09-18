@@ -9,7 +9,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install iverilog
+      - name: Install iverilog and build tools
         shell: bash
         run: sudo apt-get update && sudo apt-get install -y iverilog cmake g++
 
@@ -22,6 +22,20 @@ jobs:
       - name: Install Python packages
         shell: bash
         run: pip install -r test/requirements.txt
+
+      - name: Build C++ model and assembler
+        shell: bash
+        run: |
+          cmake -B build -S .
+          cmake --build build --target pemu_sim pemuasm -j
+
+      - name: Assemble protocol programs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for src in programs/*.pemu; do
+            build/asm/pemuasm "$src" "${src%.pemu}.hex"
+          done
 
       - name: Run tests
         run: |
