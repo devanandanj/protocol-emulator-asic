@@ -16,26 +16,31 @@ module tt_um_devanandanj_pemu (
     input  wire       rst_n     // reset_n - low to reset
 );
 
-  wire [23:0] pin_in;
-  wire [23:0] pin_out;
-  wire [23:0] pin_oe;
+  wire [7:0] pin_in;
+  wire [7:0] pin_out;
+  wire [7:0] pin_oe;
 
-  assign pin_in[7:0]   = uio_in;
-  assign pin_in[23:8]  = 16'b0;
-
-  assign uio_out  = pin_out[7:0];
-  assign uio_oe   = pin_oe[7:0];
+  assign pin_in = uio_in;
+  assign uio_out  = pin_out;
+  assign uio_oe   = pin_oe;
   assign uo_out   = 8'b0;
 
+  // Program loader control lives on the dedicated inputs. uio_in doubles as
+  // the load-data byte while rst_n=0 (no pin traffic happens in reset), then
+  // reverts to pin_in[7:0] during run.
   pemu_core core(
     .clk(clk),
     .rst_n(rst_n),
     .pin_in(pin_in),
     .pin_out(pin_out),
-    .pin_oe(pin_oe)
+    .pin_oe(pin_oe),
+    .prog_we(ui_in[0]),
+    .prog_hi(ui_in[1]),
+    .prog_rst(ui_in[2]),
+    .prog_data(uio_in)
   );
 
   // List all unused inputs to prevent warnings
-  wire _unused = &{ena,ui_in, pin_out[23:8], pin_oe[23:8], 1'b0};
+  wire _unused = &{ena, ui_in[7:3], 1'b0};
 
 endmodule

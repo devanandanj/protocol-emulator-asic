@@ -1,22 +1,67 @@
 # SPDX-License-Identifier: Apache-2.0
+import os
+import subprocess
+from pathlib import Path
+
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, RisingEdge, ReadOnly, NextTimeStep
 
 
+PROGRAM = [
+    0xC001, 0x1001, 0x1100, 0x2200, 0x4310,
+    0xC281, 0x3281, 0xC381, 0xD381, 0x6003,
+    0x5385, 0x5305, 0xC403, 0x840D, 0xC5AA,
+    0x9500, 0xB300, 0xC701, 0xE570, 0xC700,
+    0xE570, 0xA600, 0x7000,
+]
+
+# ----------------------------------------------------------------------------
+def ensure_clock(dut):
+    """Start a 10ns clock for this test.
+
+    cocotb 2.x cancels background tasks at test end, so the Clock started in
+    one @cocotb.test() does not survive into the next — every test must start
+    its own.
+    """
+    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+
+
+async def preload_program(dut, words):
+    """Push program words into program_mem via the loader port. Assumes rst_n=0."""
+    # Pulse prog_rst (ui_in[2]) to zero load_addr.
+    dut.ui_in.value = 0b0100
+    await ClockCycles(dut.clk, 1)
+    dut.ui_in.value = 0
+    for w in words:
+        # Low byte:  prog_we=1, prog_hi=0
+        dut.uio_in.value = w & 0xFF
+        dut.ui_in.value = 0b0001
+        await ClockCycles(dut.clk, 1)
+        # High byte: prog_we=1, prog_hi=1 (commits and increments)
+        dut.uio_in.value = (w >> 8) & 0xFF
+        dut.ui_in.value = 0b0011
+        await ClockCycles(dut.clk, 1)
+    dut.ui_in.value = 0
+
+
 @cocotb.test()
 async def test_step3(dut):
     """SET drives pins, OUT drives from reg bit 0, IN samples pin_in into reg."""
-    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+    ensure_clock(dut)
 
     dut.ena.value = 1
     dut.ui_in.value = 0
-    dut.uio_in.value = 0x08         # drive external pin 3 high (for IN test)
+    dut.uio_in.value = 0
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 5)
 
     # reset state
     assert int(dut.user_project.core.pc.value) == 0
+
+    # Load program while still in reset, then set pin_in[3]=1 for IN/WAIT.
+    await preload_program(dut, PROGRAM)
+    dut.uio_in.value = 0x08
 
     dut.rst_n.value = 1
 
@@ -177,3 +222,197 @@ async def test_step3(dut):
     # cycle 34: JMP 0 executes — wrap back
     await RisingEdge(dut.clk); await ReadOnly()
     assert int(pc.value) == 0
+
+
+# ============================================================================
+# Phase 3 — per-protocol RTL vs C++ golden-trace verification.
+# ============================================================================
+
+_TEST_DIR   = Path(__file__).resolve().parent
+_REPO_ROOT  = _TEST_DIR.parent
+_TRACE_DIR  = _TEST_DIR / "traces"
+
+
+def _find_pemu_sim():
+    """Locate the built pemu_sim binary. Container build first, then CLion.
+
+    Filter .exe on POSIX: the Windows workspace is often bind-mounted into the
+    Linux container, so a CLion-built `pemu_sim.exe` looks present but fails
+    to exec (FileNotFoundError from the ELF loader hitting a PE file).
+    """
+    env = os.environ.get("PEMU_SIM")
+    if env and Path(env).exists():
+        return Path(env)
+    candidates = [
+        _REPO_ROOT / "build" / "pemu_sim",
+        _REPO_ROOT / "build" / "model" / "pemu_sim",
+        _REPO_ROOT / "cmake-build-debug" / "model" / "pemu_sim",
+        _REPO_ROOT / "cmake-build-debug" / "model" / "pemu_sim.exe",
+    ]
+    if os.name != "nt":
+        candidates = [c for c in candidates if not str(c).endswith(".exe")]
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
+
+
+def _load_hex(path):
+    words = []
+    for line in Path(path).read_text().splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            words.append(int(line, 16))
+    return words
+
+
+def _load_trace(path):
+    """Parse pemu_sim's TSV trace into a list of dicts, one per cycle row."""
+    rows = []
+    for line in Path(path).read_text().splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        p = line.split("\t")
+        rows.append({
+            "cycle":   int(p[0]),
+            "pc":      int(p[1]),
+            "regs":    [int(p[2 + i]) for i in range(8)],
+            "pin_out": int(p[10]),
+            "pin_oe":  int(p[11]),
+        })
+    return rows
+
+
+def _gen_golden(hex_path, trace_path, cycles, tx_bytes=None, pin_events=None):
+    binary = _find_pemu_sim()
+    if binary is None:
+        raise RuntimeError(
+            "pemu_sim not found. Build the C++ model first (cmake --build build "
+            "or set $PEMU_SIM to its path)."
+        )
+    cmd = [str(binary), str(hex_path), str(trace_path), str(cycles)]
+    if tx_bytes:
+        cmd.append("--tx=" + ",".join(f"0x{b:02x}" for b in tx_bytes))
+    if pin_events:
+        cmd.append("--pin-events=" +
+                   ",".join(f"{c}:0x{m:x}" for c, m in pin_events))
+    subprocess.check_call(cmd)
+
+
+async def _do_reset(dut, initial_pin_mask=0):
+    # Previous test/protocol may have left us in the ReadOnly phase (signal
+    # writes are forbidden there); step out before touching any inputs.
+    await NextTimeStep()
+    dut.ena.value = 1
+    dut.ui_in.value = 0
+    dut.uio_in.value = initial_pin_mask & 0xFF
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 5)
+
+
+async def _run_protocol(dut, name, hex_path, cycles,
+                        tx_bytes=None, pin_events=None):
+    """Diff RTL against pemu_sim's golden trace cycle-for-cycle."""
+    dut._log.info(f"=== protocol: {name} ({cycles} cycles) ===")
+
+    words = _load_hex(hex_path)
+    events = {c: m for c, m in (pin_events or [])}
+    initial_mask = events.pop(0, 0)
+
+    # Golden trace was pre-generated at import time. Reading only — no subprocess
+    # here, because a blocking Python call inside a cocotb coroutine causes
+    # icarus to exit ("Simulator shut down prematurely").
+    trace_path = _TRACE_DIR / f"{name}.trace.tsv"
+    if not trace_path.exists():
+        raise RuntimeError(
+            f"Missing golden trace {trace_path}. Check that pemu_sim is built "
+            f"and _PROTOCOLS at the bottom of test.py names {name!r}."
+        )
+    golden = _load_trace(trace_path)
+
+    await _do_reset(dut, initial_pin_mask=initial_mask)
+    await preload_program(dut, words)
+
+    # Restore the initial pin_in mask that preload_program clobbered.
+    dut.uio_in.value = initial_mask & 0xFF
+    dut.rst_n.value = 1
+
+    core = dut.user_project.core
+    if tx_bytes:
+        # Backdoor TX preload — must happen in the same delta as rst_n=1 so the
+        # first posedge sees rst_n=1 (reset branch off) with tx state loaded.
+        for i, b in enumerate(tx_bytes):
+            core.tx_fifo[i].value = b
+        core.tx_head.value  = 0
+        core.tx_tail.value  = len(tx_bytes) & 0xF
+        core.tx_count.value = len(tx_bytes)
+
+    for i in range(cycles):
+        cyc = i + 1
+        if cyc in events:
+            dut.uio_in.value = events[cyc] & 0xFF
+        await RisingEdge(dut.clk)
+        await ReadOnly()
+
+        g = golden[cyc]
+        rtl_pc      = int(core.pc.value)
+        rtl_out8    = int(dut.uio_out.value)
+        rtl_oe8     = int(dut.uio_oe.value)
+        rtl_regs    = [int(core.regs[j].value) for j in range(8)]
+        exp_out8    = g["pin_out"] & 0xFF
+        exp_oe8     = g["pin_oe"]  & 0xFF
+        if (rtl_pc != g["pc"] or rtl_out8 != exp_out8
+                or rtl_oe8 != exp_oe8 or rtl_regs != g["regs"]):
+            raise AssertionError(
+                f"{name} mismatch at cycle {cyc}:\n"
+                f"  golden pc={g['pc']:3d} regs={g['regs']} "
+                f"out=0x{exp_out8:02x} oe=0x{exp_oe8:02x}\n"
+                f"  rtl    pc={rtl_pc:3d} regs={rtl_regs} "
+                f"out=0x{rtl_out8:02x} oe=0x{rtl_oe8:02x}"
+            )
+
+    dut._log.info(f"{name}: {cycles} cycles match")
+
+
+# Protocol configs: (name, hex-file, cycles, tx-bytes, pin-events)
+_PROTOCOLS = [
+    ("uart_tx",   _REPO_ROOT / "programs" / "uart_tx.hex",   500, [0x55], None),
+    ("spi",       _REPO_ROOT / "programs" / "spi.hex",       400, [0xA5], None),
+    ("i2c_write", _REPO_ROOT / "programs" / "i2c_write.hex", 1000, [0xA0], [(0, 0x18)]),
+]
+
+
+def _pre_generate_all_traces():
+    """Run pemu_sim once per protocol at module import time.
+
+    Doing this inside a cocotb coroutine (via subprocess.check_call) makes
+    icarus exit with "Simulator shut down prematurely". Running at import
+    time keeps the subprocess strictly before cocotb takes over the sim.
+    """
+    binary = _find_pemu_sim()
+    if binary is None:
+        return                       # Test will surface a helpful error later.
+    _TRACE_DIR.mkdir(exist_ok=True)
+    for name, hex_path, cycles, tx_bytes, pin_events in _PROTOCOLS:
+        trace_path = _TRACE_DIR / f"{name}.trace.tsv"
+        cmd = [str(binary), str(hex_path), str(trace_path), str(cycles)]
+        if tx_bytes:
+            cmd.append("--tx=" + ",".join(f"0x{b:02x}" for b in tx_bytes))
+        if pin_events:
+            cmd.append("--pin-events=" +
+                       ",".join(f"{c}:0x{m:x}" for c, m in pin_events))
+        subprocess.check_call(cmd)
+
+
+_pre_generate_all_traces()
+
+
+@cocotb.test()
+async def test_protocols(dut):
+    """RTL matches C++ golden trace for each protocol program."""
+    # Prior test ends in the ReadOnly phase; leave it before touching signals.
+    await NextTimeStep()
+    ensure_clock(dut)
+    for name, hex_path, cycles, tx_bytes, pin_events in _PROTOCOLS:
+        await _run_protocol(dut, name, hex_path, cycles,
+                            tx_bytes=tx_bytes, pin_events=pin_events)

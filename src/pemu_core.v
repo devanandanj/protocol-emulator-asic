@@ -1,11 +1,28 @@
+/*
+ * Copyright (c) 2024 Devanandan J
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 `default_nettype none
 
 module pemu_core (
     input   wire          clk,
     input   wire          rst_n,
-    input   wire  [23:0]  pin_in,
-    output  reg   [23:0]  pin_out,
-    output  reg   [23:0]  pin_oe
+    // Pin buses are 8 bits — TinyTapeout gives us 8 bidir uio_ pins. The
+    // 4-bit pin field in the ISA still allows encoding pins 8..15, but bit
+    // [11] is treated as reserved-must-be-zero (see docs/isa.md). All pin
+    // index sites in this file slice operand[10:8] to enforce that.
+    input   wire  [7:0]   pin_in,
+    output  reg   [7:0]   pin_out,
+    output  reg   [7:0]   pin_oe,
+    // Program loader — only active while rst_n=0.
+    // Sequence per instruction: (prog_hi=0, prog_we=1) latches low byte,
+    // then (prog_hi=1, prog_we=1) commits {hi,lo} to program_mem[load_addr]
+    // and increments load_addr. prog_rst pulses load_addr back to 0.
+    input   wire          prog_rst,
+    input   wire          prog_we,
+    input   wire          prog_hi,
+    input   wire  [7:0]   prog_data
 );
 
   localparam [3:0] OP_NOP    = 4'h0;
@@ -24,35 +41,28 @@ module pemu_core (
   localparam [3:0] OP_ROT    = 4'hD;
   localparam [3:0] OP_OUT_OD = 4'hE;
 
-  // Program memory temporary rom (32 words for step 7's extended program)
-  reg[15:0] program_mem[31:0];
-  integer i;
-  initial begin
-    for (i = 0; i < 32; i = i + 1) program_mem[i] = 16'h0000;
-    program_mem[0] = 16'hC001;   // LDI  r0, 0x01
-    program_mem[1] = 16'h1001;   // SET  pin 0, val 1     (drive pin 0 high)
-    program_mem[2] = 16'h1100;   // SET  pin 1, val 0     (drive pin 1 low)
-    program_mem[3] = 16'h2200;   // OUT  pin 2, r0        (drive pin 2 from r0 bit 0)
-    program_mem[4] = 16'h4310;   // IN   pin 3, r1        (sample pin 3 into r1 bit 0)
-    program_mem[5] = 16'hC281;   // LDI  r2, 0x81
-    program_mem[6] = 16'h3281;   // SHIFT r2, right, 1    → r2 = 0x40
-    program_mem[7] = 16'hC381;   // LDI  r3, 0x81
-    program_mem[8] = 16'hD381;   // ROT  r3, right, 1     → r3 = 0xC0
-    program_mem[9]  = 16'h6003;  // DELAY 3
-    program_mem[10] = 16'h5385;  // WAIT pin=3, val=1, timeout=5 (matches immediately)
-    program_mem[11] = 16'h5305;  // WAIT pin=3, val=0, timeout=5 (times out after 5 cycles)
-    program_mem[12] = 16'hC403;  // LDI  r4, 3
-    program_mem[13] = 16'h840D;  // JCND r4, 13   (self-loop: dec-and-branch until r4=0)
-    program_mem[14] = 16'hC5AA;  // LDI  r5, 0xAA
-    program_mem[15] = 16'h9500;  // PUSH r5                (→ rx_fifo)
-    program_mem[16] = 16'hB300;  // IRQ  3                 (set irq_lines[3])
-    program_mem[17] = 16'hC701;  // LDI  r7, 1
-    program_mem[18] = 16'hE570;  // OUT_OD pin 5, r7       (bit=1 → release pin 5)
-    program_mem[19] = 16'hC700;  // LDI  r7, 0
-    program_mem[20] = 16'hE570;  // OUT_OD pin 5, r7       (bit=0 → drive pin 5 low)
-    program_mem[21] = 16'hA600;  // PULL r6                (stalls until host provides data)
-    program_mem[22] = 16'h7000;  // JMP 0
-end
+  // Program memory — 64 words × 16 bits. Loaded by the host via prog_* port
+  // while the core is held in reset. No initial contents on real silicon.
+  reg[15:0] program_mem[63:0];
+
+  reg [5:0] load_addr;
+  reg [7:0] load_lo;
+  always @(posedge clk) begin
+      if (!rst_n) begin
+          if (prog_rst) begin
+              load_addr <= 6'd0;
+          end else if (prog_we) begin
+              if (prog_hi) begin
+                  program_mem[load_addr] <= {prog_data, load_lo};
+                  load_addr <= load_addr + 6'd1;
+              end else begin
+                  load_lo <= prog_data;
+              end
+          end
+      end
+  end
+
+
 
 reg[11:0] pc;
 
@@ -63,7 +73,7 @@ integer j;
 reg [11:0] stall_remaining;
 reg        waiting_for_pin;
 reg        wait_forever;
-reg [3:0]  wait_pin;
+reg [2:0]  wait_pin;
 reg        wait_val;
 
 // Host-interface FIFOs, IRQ lines, and PULL stall state.
@@ -83,19 +93,19 @@ reg [2:0]  pull_reg;          // which register PULL should load into
 
 integer k;
 
-wire[15:0] instr    = program_mem[pc[4:0]];
+wire[15:0] instr    = program_mem[pc[5:0]];
 wire[3:0]  op       = instr[15:12];
 wire[11:0] operand  = instr[11:0];
 
 always @(posedge clk) begin
     if (!rst_n) begin
         pc               <= 12'd0;
-        pin_out          <= 24'd0;
-        pin_oe           <= 24'd0;
+        pin_out          <= 8'd0;
+        pin_oe           <= 8'd0;
         stall_remaining  <= 12'd0;
         waiting_for_pin  <= 1'b0;
         wait_forever     <= 1'b0;
-        wait_pin         <= 4'd0;
+        wait_pin         <= 3'd0;
         wait_val         <= 1'b0;
         tx_head          <= 4'd0;
         tx_tail          <= 4'd0;
@@ -160,21 +170,21 @@ always @(posedge clk) begin
             end
             OP_SET: begin
                 // operand layout: pin[11:8], val[7:0] - val[0] only matters
-                pin_out[operand[11:8]] <= operand[0];
-                pin_oe[operand[11:8]]  <= 1'b1;
+                pin_out[operand[10:8]] <= operand[0];
+                pin_oe[operand[10:8]]  <= 1'b1;
                 pc <= pc + 12'd1;
             end
             OP_OUT: begin
                 //operand layout: pin[11:8], reg[6:4] - 3bits, top bit reserved
-                pin_out[operand[11:8]] <= regs[operand[6:4]][0];
-                pin_oe[operand[11:8]]  <= 1'b1;
+                pin_out[operand[10:8]] <= regs[operand[6:4]][0];
+                pin_oe[operand[10:8]]  <= 1'b1;
                 pc <= pc + 12'd1;
             end
             OP_IN: begin
                 // IN releases the pin's OE (mirror of the C++ model) then
                 // samples pin_in into bit 0 of regs[r].
-                pin_oe[operand[11:8]] <= 1'b0;
-                regs[operand[6:4]] <= {regs[operand[6:4]][7:1], pin_in[operand[11:8]]};
+                pin_oe[operand[10:8]] <= 1'b0;
+                regs[operand[6:4]] <= {regs[operand[6:4]][7:1], pin_in[operand[10:8]]};
                 pc <= pc + 12'd1;
             end
             OP_SHIFT: begin
@@ -207,21 +217,21 @@ always @(posedge clk) begin
             end
             OP_WAIT: begin
                 // operand: pin[11:8], val[7], timeout[6:0]
-                pin_oe[operand[11:8]] <= 1'b0;   // release OE like IN
-                if (pin_in[operand[11:8]] == operand[7]) begin
+                pin_oe[operand[10:8]] <= 1'b0;   // release OE like IN
+                if (pin_in[operand[10:8]] == operand[7]) begin
                     // condition met at issue — 1 cycle total, no stall
                 end else if (operand[6:0] == 7'd0) begin
                     // timeout=0 → wait forever
                     waiting_for_pin <= 1'b1;
                     wait_forever    <= 1'b1;
-                    wait_pin        <= operand[11:8];
+                    wait_pin        <= operand[10:8];
                     wait_val        <= operand[7];
                 end else if (operand[6:0] == 7'd1) begin
                     // timeout=1 → only issue cycle allowed, already exhausted
                 end else begin
                     waiting_for_pin <= 1'b1;
                     wait_forever    <= 1'b0;
-                    wait_pin        <= operand[11:8];
+                    wait_pin        <= operand[10:8];
                     wait_val        <= operand[7];
                     stall_remaining <= {5'd0, operand[6:0]} - 12'd1;
                 end
@@ -261,10 +271,10 @@ always @(posedge clk) begin
                 //   bit 0 == 0 → drive pin low (OE asserted)
                 //   bit 0 == 1 → release pin   (OE deasserted, external pullup wins)
                 if (regs[operand[6:4]][0] == 1'b0) begin
-                    pin_out[operand[11:8]] <= 1'b0;
-                    pin_oe [operand[11:8]] <= 1'b1;
+                    pin_out[operand[10:8]] <= 1'b0;
+                    pin_oe [operand[10:8]] <= 1'b1;
                 end else begin
-                    pin_oe [operand[11:8]] <= 1'b0;
+                    pin_oe [operand[10:8]] <= 1'b0;
                 end
                 pc <= pc + 12'd1;
             end
