@@ -422,12 +422,18 @@ def _pre_generate_all_traces():
         subprocess.check_call(cmd)
 
 
-_pre_generate_all_traces()
+if os.environ.get("GATES") != "yes":
+    _pre_generate_all_traces()
 
 
-@cocotb.test()
+@cocotb.test(skip=os.environ.get("GATES") == "yes")
 async def test_protocols(dut):
-    """RTL matches C++ golden trace for each protocol program."""
+    """RTL matches C++ golden trace for each protocol program.
+
+    Skipped in gate-level sim: GL is ~100x slower and the gl_test CI job
+    doesn't build pemu_sim / assemble .hex, so there'd be nothing to
+    compare against anyway. RTL cocotb runs this on every push.
+    """
     # Prior test ends in the ReadOnly phase; leave it before touching signals.
     await NextTimeStep()
     ensure_clock(dut)
