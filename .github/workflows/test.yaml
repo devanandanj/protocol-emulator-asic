@@ -11,7 +11,7 @@ jobs:
 
       - name: Install iverilog
         shell: bash
-        run: sudo apt-get update && sudo apt-get install -y iverilog
+        run: sudo apt-get update && sudo apt-get install -y iverilog cmake g++
 
       # Set Python up and install cocotb
       - name: Setup python
