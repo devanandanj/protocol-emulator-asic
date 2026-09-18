@@ -45,9 +45,43 @@ async def preload_program(dut, words):
     dut.ui_in.value = 0
 
 
-@cocotb.test()
+@cocotb.test(skip=os.environ.get("GATES") != "yes")
+async def test_gl_smoke(dut):
+    """Gate-level smoke: reset, load a 1-word program, run, verify no X on pins.
+
+    The RTL introspection tests skip in GL mode because synthesis flattens
+    all internal names. This one runs GL-only and only observes externally
+    visible signals — the point is to prove the hardened netlist ticks.
+    """
+    ensure_clock(dut)
+    dut.ena.value = 1
+    dut.ui_in.value = 0
+    dut.uio_in.value = 0
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 5)
+
+    # Load a one-word program: JMP 0 (opcode 0x7, addr 0) so the core
+    # spins harmlessly after reset instead of executing X-initialised
+    # program-mem contents.
+    await preload_program(dut, [0x7000])
+    dut.uio_in.value = 0
+    dut.rst_n.value = 1
+    await ClockCycles(dut.clk, 20)
+
+    # No X on the driven output pins after a real reset + program load.
+    assert dut.uio_out.value.is_resolvable, f"uio_out has X: {dut.uio_out.value}"
+    assert dut.uio_oe.value.is_resolvable, f"uio_oe has X: {dut.uio_oe.value}"
+
+
+@cocotb.test(skip=os.environ.get("GATES") == "yes")
 async def test_step3(dut):
-    """SET drives pins, OUT drives from reg bit 0, IN samples pin_in into reg."""
+    """SET drives pins, OUT drives from reg bit 0, IN samples pin_in into reg.
+
+    Skipped in GATES=yes (gate-level sim): all assertions peek at internal
+    signals (dut.user_project.core.pc, .regs, .rx_fifo, ...) that flatten
+    away in the synthesized netlist. The GL smoke test above covers the
+    netlist-executes signal.
+    """
     ensure_clock(dut)
 
     dut.ena.value = 1
