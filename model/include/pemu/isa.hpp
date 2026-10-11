@@ -42,7 +42,7 @@ enum class Op : std::uint8_t {
 };
 
 inline constexpr std::size_t kNumRegs      = 8;
-inline constexpr std::size_t kProgramWords = 128;
+inline constexpr std::size_t kProgramWords = 256;   // matches the RTL's 256x16 SRAM
 inline constexpr std::size_t kNumPins      = 24;   // 8 ui + 8 uo + 8 uio
 inline constexpr std::size_t kFifoSize     = 16;   // TX and RX bounded FIFO depth
 inline constexpr std::size_t kNumIrqLines  = 16;   // irq_lines_ is a 16-bit bitmask

@@ -33,6 +33,64 @@
 
   "//": "Configuration docs: https://librelane.readthedocs.io/en/latest/reference/configuration.html",
 
+  "//": "------------------------------------------------------------------",
+  "//": "PEmu deviation from the template: SRAM program memory.",
+  "//": "The program memory is IHP's RM_IHPSG13_1P_256x16_c2_bm_bist SRAM macro",
+  "//": "(instance core.u_sram after flattening). Its GDS/LEF/liberty come from",
+  "//": "the PDK (libs.ref/sg13cmos5l_sram symlinks to sg13g2_sram). This setup",
+  "//": "follows 2AMLogic/sg13cmos5l-protocol-emulator (Apache-2.0), the first",
+  "//": "public design to take this macro through the CMOS5L flow.",
+  "//": "Placement: 6x4 die is 1289.28 x 710.64 um. x=91.2 matches 2AMLogic's",
+  "//": "placement so the PDN strap lattice below lines up with the macro's",
+  "//": "Metal4 power stripes; y=570.78 (151 rows of 3.78 um) puts the macro",
+  "//": "near the top edge. Both are site multiples (0.48 x 3.78 um).",
+  "//": "------------------------------------------------------------------",
+  "MACROS": {
+    "RM_IHPSG13_1P_256x16_c2_bm_bist": {
+      "gds": [
+        "pdk_dir::libs.ref/sg13cmos5l_sram/gds/RM_IHPSG13_1P_256x16_c2_bm_bist.gds"
+      ],
+      "lef": [
+        "pdk_dir::libs.ref/sg13cmos5l_sram/lef/RM_IHPSG13_1P_256x16_c2_bm_bist.lef"
+      ],
+      "vh": [
+        "dir::../macros/RM_IHPSG13_1P_256x16_c2_bm_bist_bb.v"
+      ],
+      "instances": {
+        "core.u_sram": {
+          "location": [91.2, 570.78],
+          "orientation": "N"
+        }
+      },
+      "lib": {
+        "*typ*": [
+          "pdk_dir::libs.ref/sg13cmos5l_sram/lib/RM_IHPSG13_1P_256x16_c2_bm_bist_typ_1p20V_25C.lib"
+        ],
+        "*slow*": [
+          "pdk_dir::libs.ref/sg13cmos5l_sram/lib/RM_IHPSG13_1P_256x16_c2_bm_bist_slow_1p08V_125C.lib"
+        ],
+        "*fast*": [
+          "pdk_dir::libs.ref/sg13cmos5l_sram/lib/RM_IHPSG13_1P_256x16_c2_bm_bist_fast_1p32V_m55C.lib"
+        ]
+      }
+    }
+  },
+
+  "//": "The macro has three supply pins: VDD!, VSS! and VDDARRAY! (bit array).",
+  "PDN_MACRO_CONNECTIONS": [
+    "core.u_sram VPWR VGND VDD! VSS!",
+    "core.u_sram VPWR VGND VDDARRAY! VSS!"
+  ],
+
+  "//": "Custom PDN: the macro's power pins are Metal4-only and TopMetal1 is",
+  "//": "not on the CMOS5L precheck allowlist, so src/pdn_cfg.tcl draws Metal4",
+  "//": "bridge stripes over the macro's own stripes. See that file.",
+  "FP_PDN_CFG": "dir::pdn_cfg.tcl",
+
+  "//": "Magic DRC flags thousands of violations inside the foundry SRAM GDS,",
+  "//": "which we cannot change. TT precheck and LVS still gate the design.",
+  "ERROR_ON_MAGIC_DRC": 0,
+
   "//": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
   "//": "!!! DO NOT CHANGE ANYTHING BELOW THIS POINT !!!",
   "//": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
@@ -58,8 +116,12 @@
   "FP_IO_HLENGTH": 2,
   "FP_IO_VLENGTH": 2,
 
-  "FP_PDN_VPITCH": 50.0,
+  "//": "PEmu: pitch 44.96 (= 4 x the SRAM's 11.24 um stripe pitch) and offset",
+  "//": "93.985 so straps crossing the macro land on same-net stripes, never",
+  "//": "on opposite-net ones. Template value was 50.0 with no offset.",
+  "FP_PDN_VPITCH": 44.96,
   "FP_PDN_VWIDTH": 2.1,
+  "FP_PDN_VOFFSET": 93.985,
 
   "//": "Clock",
   "RUN_CTS": 1,

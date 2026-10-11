@@ -19,7 +19,7 @@ JTAG, or slow-USB — just by loading a different program at boot.
   eight 8-bit general-purpose registers, and two 16-deep FIFOs on the
   host seam.
 - **Verilog RTL** — `src/pemu_core.v` (the core) + `src/project.v` (the
-  Tiny Tapeout wrapper). 64-word program memory loaded at boot via a
+  Tiny Tapeout wrapper). 256-word SRAM program memory (IHP SRAM macro) loaded at boot via a
   three-wire loader on `ui[0..2]` + `uio_in`.
 - **Cycle-accurate C++ model** (`model/`) — the golden reference the
   RTL is verified against.

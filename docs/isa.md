@@ -9,7 +9,7 @@ diffs RTL and model cycle-for-cycle on every one of them.
 
 1. Emulate UART, SPI, and I²C from firmware; leave headroom for
    PS/2, slow USB, or JTAG as stretch protocols.
-2. Fit into 8×4 Tiny Tapeout tiles (~32K logic cells) *including*
+2. Fit into 6×4 Tiny Tapeout tiles (~24K logic cells) *including*
    register file, program memory, pin mux, and host interface.
 3. Cycle-precise timing so bit periods and setup/hold windows are
    deterministic from the outside.
@@ -29,7 +29,7 @@ diffs RTL and model cycle-for-cycle on every one of them.
 |----------------|-----------:|-------------:|-------------:|-----------------------------|
 | RP2040 PIO     | 16 bits    | 32 instrs    | 9            | 4 SMs share 32-instr memory |
 | TI Sitara PRU  | 32 bits    | 8K instrs    | ~40 RISC ops | 200 MHz, huge for our budget|
-| PEmu (target)  | 16 bits    | 64–128 instrs| 8–12         | one core, one program at a time |
+| PEmu           | 16 bits    | 256 instrs   | 8–12         | one core, one program at a time |
 
 ## Instruction set (candidate v0.1)
 
@@ -140,8 +140,9 @@ they explicitly wait.
 
 ### JMP encoding detail
 
-- `addr` is 12 bits [11:0], range 0..4095. Covers any position in
-  the 128-word (or up to 4096-word) program memory.
+- `addr` is 12 bits [11:0], range 0..4095. The shipped chip has a
+  256-word program memory and only `pc[7:0]` addresses it, so targets
+  alias modulo 256 (the model throws past the loaded program instead).
 - 1 cycle. `pc = addr` unconditionally. The next `step()` fetches
   program[addr]; PC-bounds checking runs there, not in JMP.
 

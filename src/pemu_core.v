@@ -42,26 +42,61 @@ module pemu_core (
   localparam [3:0] OP_ROT    = 4'hD;
   localparam [3:0] OP_OUT_OD = 4'hE;
 
-  // Program memory — 64 words × 16 bits. Loaded by the host via prog_* port
-  // while the core is held in reset. No initial contents on real silicon.
-  reg[15:0] program_mem[63:0];
-
-  reg [5:0] load_addr;
+  // Program memory — 256 words × 16 bits in IHP's single-port SRAM macro.
+  // Loaded by the host via the prog_* port while the core is held in reset.
+  // No initial contents on real silicon.
+  //
+  // The SRAM has a registered read: A_DOUT shows mem[A_ADDR] one clock after
+  // the address is presented, and holds when no read is issued. To keep
+  // single-cycle instruction issue (and cycle-for-cycle agreement with the
+  // C++ model), the SRAM is addressed with pc_next — the value pc takes at
+  // this edge — so A_DOUT == mem[pc] throughout the following cycle.
+  reg [7:0] load_addr;
   reg [7:0] load_lo;
+  wire      load_commit = !rst_n && !prog_rst && prog_we && prog_hi;
+
   always @(posedge clk) begin
       if (!rst_n) begin
           if (prog_rst) begin
-              load_addr <= 6'd0;
+              load_addr <= 8'd0;
           end else if (prog_we) begin
               if (prog_hi) begin
-                  program_mem[load_addr] <= {prog_data, load_lo};
-                  load_addr <= load_addr + 6'd1;
+                  load_addr <= load_addr + 8'd1;
               end else begin
                   load_lo <= prog_data;
               end
           end
       end
   end
+
+  // fetch_valid: A_DOUT holds mem[pc]. A loader commit is a write, which
+  // leaves A_DOUT stale, so the host must hold rst_n low for at least one
+  // clock after the last commit (that cycle reads address 0). If it doesn't,
+  // the core spends one extra cycle re-fetching before executing.
+  reg fetch_valid;
+
+  wire [15:0] sram_dout;
+  wire [11:0] pc_next;
+
+  RM_IHPSG13_1P_256x16_c2_bm_bist u_sram (
+      .A_CLK      (clk),
+      .A_MEN      (1'b1),
+      .A_WEN      (load_commit),
+      .A_REN      (!load_commit),
+      .A_ADDR     (load_commit ? load_addr : pc_next[7:0]),
+      .A_DIN      ({prog_data, load_lo}),
+      .A_DLY      (1'b1),
+      .A_DOUT     (sram_dout),
+      .A_BM       (16'hFFFF),
+      .A_BIST_CLK (1'b0),
+      .A_BIST_EN  (1'b0),
+      .A_BIST_MEN (1'b0),
+      .A_BIST_WEN (1'b0),
+      .A_BIST_REN (1'b0),
+      .A_BIST_ADDR(8'd0),
+      .A_BIST_DIN (16'd0),
+      .A_BIST_BM  (16'd0)
+  );
 
 
 
@@ -94,13 +129,45 @@ reg [2:0]  pull_reg;          // which register PULL should load into
 
 integer k;
 
-wire[15:0] instr    = program_mem[pc[5:0]];
+wire[15:0] instr    = sram_dout;
 wire[3:0]  op       = instr[15:12];
 wire[11:0] operand  = instr[11:0];
 
+// Any cycle in which no instruction issues and pc holds.
+wire stalled = !fetch_valid || waiting_for_pin ||
+               (stall_remaining > 12'd0) || waiting_for_pull;
+
+// Next-PC logic, combinational so it can address the SRAM a cycle ahead.
+// The only branching opcodes are JMP and JCND; every other implemented
+// opcode falls through to pc+1. The unimplemented opcode 0xF freezes pc.
+// pc stays 12 bits (the ISA's JMP field), but only pc[7:0] reaches the
+// 256-word SRAM, so addresses alias modulo 256.
+reg [11:0] pc_next_r;
+assign pc_next = pc_next_r;
+
+always @(*) begin
+    if (!rst_n) begin
+        pc_next_r = 12'd0;
+    end else if (stalled) begin
+        pc_next_r = pc;
+    end else begin
+        case (op)
+            OP_JMP:  pc_next_r = operand;
+            OP_JCND: pc_next_r = (regs[operand[10:8]] != 8'd0)
+                                 ? {4'd0, operand[7:0]} : pc + 12'd1;
+            4'hF:    pc_next_r = pc;
+            default: pc_next_r = pc + 12'd1;
+        endcase
+    end
+end
+
+always @(posedge clk) begin
+    pc <= pc_next;
+end
+
 always @(posedge clk) begin
     if (!rst_n) begin
-        pc               <= 12'd0;
+        fetch_valid      <= !load_commit;
         pin_out          <= 8'd0;
         pin_oe           <= 8'd0;
         stall_remaining  <= 12'd0;
@@ -122,6 +189,10 @@ always @(posedge clk) begin
             tx_fifo[k] <= 8'd0;
             rx_fifo[k] <= 8'd0;
         end
+    end else if (!fetch_valid) begin
+        // Reset was released straight after a loader write; this cycle's
+        // read of address 0 (pc) refills A_DOUT.
+        fetch_valid <= 1'b1;
     end else if (waiting_for_pin) begin
         // WAIT stall service — check condition each cycle
         if (pin_in[wait_pin] == wait_val) begin
@@ -148,45 +219,36 @@ always @(posedge clk) begin
         end
     end else begin
         case (op)
-            OP_NOP: begin
-                pc <= pc + 12'd1;
-            end
-            OP_JMP: begin
-                pc <= operand;
+            // pc updates for every opcode live in the pc_next block above.
+            OP_NOP, OP_JMP: begin
             end
             OP_JCND: begin
                 // operand: reg[10:8], addr[7:0]
-                // Decrement-and-branch: if regs[r] != 0, decrement and jump; else pc++.
+                // Decrement-and-branch: if regs[r] != 0, decrement (the
+                // jump itself is in pc_next).
                 if (regs[operand[10:8]] != 8'd0) begin
                     regs[operand[10:8]] <= regs[operand[10:8]] - 8'd1;
-                    pc <= {4'd0, operand[7:0]};
-                end else begin
-                    pc <= pc + 12'd1;
                 end
             end
             OP_LDI: begin
                 // operand layout: reg[10:8] (3 bits, top bit reserved), imm[7:0]
                 regs[operand[10:8]] <= operand[7:0];
-                pc <= pc + 12'd1;
             end
             OP_SET: begin
                 // operand layout: pin[11:8], val[7:0] - val[0] only matters
                 pin_out[operand[10:8]] <= operand[0];
                 pin_oe[operand[10:8]]  <= 1'b1;
-                pc <= pc + 12'd1;
             end
             OP_OUT: begin
                 //operand layout: pin[11:8], reg[6:4] - 3bits, top bit reserved
                 pin_out[operand[10:8]] <= regs[operand[6:4]][0];
                 pin_oe[operand[10:8]]  <= 1'b1;
-                pc <= pc + 12'd1;
             end
             OP_IN: begin
                 // IN releases the pin's OE (mirror of the C++ model) then
                 // samples pin_in into bit 0 of regs[r].
                 pin_oe[operand[10:8]] <= 1'b0;
                 regs[operand[6:4]] <= {regs[operand[6:4]][7:1], pin_in[operand[10:8]]};
-                pc <= pc + 12'd1;
             end
             OP_SHIFT: begin
                 if(operand[7]) begin
@@ -194,7 +256,6 @@ always @(posedge clk) begin
                 end else begin
                     regs[operand[10:8]] <= regs[operand[10:8]] << operand[3:0];
                 end
-                pc <= pc + 12'd1;
             end
             OP_ROT: begin
                 if (operand[7]) begin
@@ -208,13 +269,11 @@ always @(posedge clk) begin
                         (regs[operand[10:8]] << operand[2:0]) |
                         (regs[operand[10:8]] >> (4'd8 - {1'b0, operand[2:0]}));
                 end
-                pc <= pc + 12'd1;
             end
             OP_DELAY: begin
                 // Consume max(n, 1) cycles. Issue counts as 1; set stall_remaining
                 // to n-1 (or 0 if n <= 1) so total elapsed = max(n, 1).
                 stall_remaining <= (operand > 12'd1) ? (operand - 12'd1) : 12'd0;
-                pc <= pc + 12'd1;
             end
             OP_WAIT: begin
                 // operand: pin[11:8], val[7], timeout[6:0]
@@ -236,7 +295,6 @@ always @(posedge clk) begin
                     wait_val        <= operand[7];
                     stall_remaining <= {5'd0, operand[6:0]} - 12'd1;
                 end
-                pc <= pc + 12'd1;
             end
             OP_PUSH: begin
                 // operand: reg[10:8] — append regs[r] to RX FIFO.
@@ -247,7 +305,6 @@ always @(posedge clk) begin
                     rx_tail          <= rx_tail + 4'd1;
                     rx_count         <= rx_count + 5'd1;
                 end
-                pc <= pc + 12'd1;
             end
             OP_PULL: begin
                 // operand: reg[10:8] — pop TX FIFO head into regs[r].
@@ -260,12 +317,10 @@ always @(posedge clk) begin
                     waiting_for_pull <= 1'b1;
                     pull_reg         <= operand[10:8];
                 end
-                pc <= pc + 12'd1;
             end
             OP_IRQ: begin
                 // operand: irq index at [11:8]. Set that bit in irq_lines.
                 irq_lines[operand[11:8]] <= 1'b1;
-                pc <= pc + 12'd1;
             end
             OP_OUT_OD: begin
                 // operand: pin[11:8], reg[6:4]. Open-drain drive:
@@ -277,10 +332,9 @@ always @(posedge clk) begin
                 end else begin
                     pin_oe [operand[10:8]] <= 1'b0;
                 end
-                pc <= pc + 12'd1;
             end
             default: begin
-                // Not yet implemented — freeze PC.
+                // Not yet implemented — pc_next freezes PC.
             end
         endcase
     end

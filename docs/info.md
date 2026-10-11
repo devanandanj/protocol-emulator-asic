@@ -9,7 +9,7 @@ has real content (placeholder text is rejected).
 PEmu (Protocol Emulator) is a small programmable pin-bit-banging core in
 the tradition of the RP2040's PIO state machines and TI Sitara's PRU.
 Instead of shipping fixed UART / SPI / I²C peripherals in silicon, the
-chip is one datapath plus a 64-word program memory: the *firmware* picks
+chip is one datapath plus a 256-word SRAM program memory: the *firmware* picks
 the protocol at boot. Reloading a different program turns the same
 silicon into a UART, an SPI master, or an I²C master.
 
@@ -45,7 +45,10 @@ After the design is fabricated and mounted on a Tiny Tapeout dev board:
    `ui[1]` (`prog_hi`) low, and pulse `ui[0]` (`prog_we`) high for one
    clock. Then present the high byte on `uio_in`, set `prog_hi` high,
    and pulse `prog_we` again. The load address auto-increments.
-4. Release `rst_n`. The core fetches from address 0.
+4. Hold `rst_n` low for at least one more clock with `prog_we` low (the
+   SRAM reads address 0 here), then release `rst_n`. The core fetches
+   from address 0. Releasing reset straight after the last write still
+   works but costs one extra cycle before the first instruction.
 5. Program behaviour: `uart_tx.pemu` transmits any byte pushed into the
    TX FIFO (via a host write to the FIFO seam) as an 8N1 UART frame on
    `uio[0]`; `spi.pemu` clocks SCK on `uio[0]`, drives MOSI on `uio[1]`,

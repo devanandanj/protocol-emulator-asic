@@ -19,7 +19,6 @@ else
 # Gate level simulation:
 SIM_BUILD				= sim_build/gl
 COMPILE_ARGS    += -DGL_TEST
-COMPILE_ARGS    += -DFUNCTIONAL
 COMPILE_ARGS    += -DSIM
 VERILOG_SOURCES += $(PDK_ROOT)/ihp-sg13cmos5l/libs.ref/sg13cmos5l_io/verilog/sg13cmos5l_io.v
 VERILOG_SOURCES += $(PDK_ROOT)/ihp-sg13cmos5l/libs.ref/sg13cmos5l_stdcell/verilog/sg13cmos5l_stdcell.v
@@ -32,6 +31,14 @@ VERILOG_SOURCES += $(PWD)/ihp_primitives.v
 VERILOG_SOURCES += $(PWD)/gate_level_netlist.v
 
 endif
+
+# Program memory is IHP's RM_IHPSG13_1P_256x16_c2_bm_bist SRAM macro. Its
+# vendored behavioral model is needed in both RTL and gate-level sim (the
+# netlist keeps the macro as an instance). FUNCTIONAL selects the zero-delay
+# model branch; the timing branch relies on SDF-annotated delayed nets.
+COMPILE_ARGS    += -DFUNCTIONAL
+VERILOG_SOURCES += $(PWD)/models/RM_IHPSG13_1P_core_behavioral_bm_bist.v
+VERILOG_SOURCES += $(PWD)/models/RM_IHPSG13_1P_256x16_c2_bm_bist.v
 
 # Allow sharing configuration between design and testbench via `include`:
 COMPILE_ARGS 		+= -I$(SRC_DIR)

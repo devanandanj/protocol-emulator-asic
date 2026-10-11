@@ -7,11 +7,9 @@ project:
   language:     "Verilog"
   clock_hz:     50000000
 
-  # Rough FF budget: 12-bit PC, 8×8-bit regs, 64×16-bit program mem,
-  # 2×(16×8-bit FIFOs), 16-bit IRQ, 8-bit pin_out/pin_oe, small FSMs.
-  # ~1500 FFs total, so 4x2 is a comfortable first-cut floorplan. Bump to
-  # 8x2 or 8x4 if utilization or timing forces it.
-  tiles: "4x2"
+  # 6x4 is the competition's required tile size. Program memory is a
+  # 256x16 IHP SRAM macro (see src/config.json), not flip-flops.
+  tiles: "6x4"
 
   top_module:  "tt_um_devanandanj_pemu"
 

@@ -42,7 +42,10 @@ async def preload_program(dut, words):
         dut.uio_in.value = (w >> 8) & 0xFF
         dut.ui_in.value = 0b0011
         await ClockCycles(dut.clk, 1)
+    # One idle clock still in reset: the SRAM program memory reads address 0
+    # here so the first instruction is ready the cycle rst_n rises.
     dut.ui_in.value = 0
+    await ClockCycles(dut.clk, 1)
 
 
 @cocotb.test(skip=os.environ.get("GATES") != "yes")
@@ -253,6 +256,56 @@ async def test_step3(dut):
     # cycle 34: JMP 0 executes — wrap back
     await RisingEdge(dut.clk); await ReadOnly()
     assert int(pc.value) == 0
+
+
+@cocotb.test(skip=os.environ.get("GATES") == "yes")
+async def test_sram_prog_mem(dut):
+    """256-word SRAM program memory: high addresses and the boot re-fetch.
+
+    Loads a program whose live code sits at 200-201 (beyond the old 64-word
+    flop memory), then releases rst_n on the cycle straight after the last
+    loader write. That skips the idle reset cycle the host is meant to give,
+    so the core must spend exactly one extra cycle re-fetching address 0
+    before it executes.
+    """
+    await NextTimeStep()
+    ensure_clock(dut)
+    dut.ena.value = 1
+    dut.ui_in.value = 0
+    dut.uio_in.value = 0
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 5)
+
+    words = [0x70C8] + [0x0000] * 199 + [0xC05A, 0x70C9]  # JMP 200; NOPs; LDI r0,0x5A; JMP 201
+    dut.ui_in.value = 0b0100
+    await ClockCycles(dut.clk, 1)
+    for w in words:
+        dut.uio_in.value = w & 0xFF
+        dut.ui_in.value = 0b0001
+        await ClockCycles(dut.clk, 1)
+        dut.uio_in.value = (w >> 8) & 0xFF
+        dut.ui_in.value = 0b0011
+        await ClockCycles(dut.clk, 1)
+    # No idle reset cycle: release immediately after the final commit.
+    dut.ui_in.value = 0
+    dut.uio_in.value = 0
+    dut.rst_n.value = 1
+
+    core = dut.user_project.core
+    # Cycle 1: re-fetch bubble — nothing issues, pc stays 0.
+    await RisingEdge(dut.clk); await ReadOnly()
+    assert int(core.pc.value) == 0
+    # Cycle 2: JMP 200.
+    await RisingEdge(dut.clk); await ReadOnly()
+    assert int(core.pc.value) == 200
+    # Cycle 3: LDI r0, 0x5A from address 200.
+    await RisingEdge(dut.clk); await ReadOnly()
+    assert int(core.pc.value) == 201
+    assert int(core.regs[0].value) == 0x5A
+    # Cycles 4-5: JMP 201 spins in place.
+    for _ in range(2):
+        await RisingEdge(dut.clk); await ReadOnly()
+        assert int(core.pc.value) == 201
 
 
 # ============================================================================
