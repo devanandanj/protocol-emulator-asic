@@ -27,50 +27,77 @@ def ensure_clock(dut):
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
 
 
-async def preload_program(dut, words):
-    """Push program words into program_mem via the loader port. Assumes rst_n=0."""
-    # Pulse prog_rst (ui_in[2]) to zero load_addr.
-    dut.ui_in.value = 0b0100
-    await ClockCycles(dut.clk, 1)
+# Host port commands and pins (see docs/architecture.md).
+CMD_CTRL, CMD_PROG, CMD_TX, CMD_RX, CMD_IRQ = 1, 2, 3, 4, 5
+SCK, MOSI, CS_N = 0b001, 0b010, 0b100
+SCK_HALF = 4        # clocks per SCK half period: the port's clk/8 limit
+STATUS_RUN, STATUS_IRQ, STATUS_TX_FULL, STATUS_RX_COUNT = 0x80, 0x40, 0x20, 0x1F
+
+
+async def spi_xfer(dut, data):
+    """One host-port frame, SPI mode 0. Returns the bytes seen on MISO."""
     dut.ui_in.value = 0
+    await ClockCycles(dut.clk, SCK_HALF)
+    received = []
+    for byte in data:
+        got = 0
+        for i in range(7, -1, -1):
+            mosi = MOSI if (byte >> i) & 1 else 0
+            dut.ui_in.value = mosi
+            await ClockCycles(dut.clk, SCK_HALF)
+            got = (got << 1) | (int(dut.uo_out.value) & 1)
+            dut.ui_in.value = mosi | SCK
+            await ClockCycles(dut.clk, SCK_HALF)
+        received.append(got)
+    dut.ui_in.value = 0
+    await ClockCycles(dut.clk, SCK_HALF)
+    dut.ui_in.value = CS_N
+    await ClockCycles(dut.clk, 4)
+    return received
+
+
+async def read_status(dut):
+    return (await spi_xfer(dut, [0]))[0]
+
+
+async def load_program(dut, words, addr=0):
+    """Write program words through the host port. Core must be halted."""
+    data = [CMD_PROG, addr]
     for w in words:
-        # Low byte:  prog_we=1, prog_hi=0
-        dut.uio_in.value = w & 0xFF
-        dut.ui_in.value = 0b0001
-        await ClockCycles(dut.clk, 1)
-        # High byte: prog_we=1, prog_hi=1 (commits and increments)
-        dut.uio_in.value = (w >> 8) & 0xFF
-        dut.ui_in.value = 0b0011
-        await ClockCycles(dut.clk, 1)
-    # One idle clock still in reset: the SRAM program memory reads address 0
-    # here so the first instruction is ready the cycle rst_n rises.
-    dut.ui_in.value = 0
-    await ClockCycles(dut.clk, 1)
+        data += [w & 0xFF, w >> 8]
+    await spi_xfer(dut, data)
+
+
+async def start_core(dut):
+    """Set run, returning in the cycle run rises so cycle 1 is the next edge.
+
+    The CTRL frame finishes in the background: run rises mid-frame, and
+    waiting for the frame's end would miss the program's first cycles.
+    """
+    cocotb.start_soon(spi_xfer(dut, [CMD_CTRL, 1]))
+    while True:
+        await RisingEdge(dut.clk)
+        await ReadOnly()
+        if int(dut.user_project.core.run.value):
+            return
 
 
 @cocotb.test(skip=os.environ.get("GATES") != "yes")
 async def test_gl_smoke(dut):
-    """Gate-level smoke: reset, load a 1-word program, run 20 clocks.
+    """Gate-level smoke: load and run a program through the host port.
 
     Runs GL-only. The RTL introspection tests can't run against the
-    flattened netlist. This one just proves the hardened design
-    elaborates, ticks, and doesn't deadlock the simulator — no X-vs-
-    resolved assertion, since some yosys-inferred FFs come up X in GL
-    sim until a signal drives them and that's expected behaviour, not
-    a design bug.
+    flattened netlist, so this checks only the chip's pins: the program
+    drives pin 0 high, and the status byte reports the core running.
     """
     ensure_clock(dut)
-    dut.ena.value = 1
-    dut.ui_in.value = 0
-    dut.uio_in.value = 0
-    dut.rst_n.value = 0
-    await ClockCycles(dut.clk, 5)
-    # Load JMP 0 at address 0 so the core spins on a known instruction
-    # instead of executing X-initialised program-mem contents.
-    await preload_program(dut, [0x7000])
-    dut.uio_in.value = 0
-    dut.rst_n.value = 1
+    await _do_reset(dut)
+    await load_program(dut, [0x1001, 0x7001])   # SET pin 0, 1; JMP 1
+    await spi_xfer(dut, [CMD_CTRL, 1])
     await ClockCycles(dut.clk, 20)
+    assert int(dut.uio_oe.value) & 1
+    assert int(dut.uio_out.value) & 1
+    assert await read_status(dut) & STATUS_RUN
 
 
 @cocotb.test(skip=os.environ.get("GATES") == "yes")
@@ -83,21 +110,15 @@ async def test_step3(dut):
     netlist-executes signal.
     """
     ensure_clock(dut)
+    await _do_reset(dut)
 
-    dut.ena.value = 1
-    dut.ui_in.value = 0
-    dut.uio_in.value = 0
-    dut.rst_n.value = 0
-    await ClockCycles(dut.clk, 5)
-
-    # reset state
+    # halted state
     assert int(dut.user_project.core.pc.value) == 0
 
-    # Load program while still in reset, then set pin_in[3]=1 for IN/WAIT.
-    await preload_program(dut, PROGRAM)
+    # Load program while halted, then set pin_in[3]=1 for IN/WAIT.
+    await load_program(dut, PROGRAM)
     dut.uio_in.value = 0x08
-
-    dut.rst_n.value = 1
+    await start_core(dut)
 
     pc      = dut.user_project.core.pc
     regs    = dut.user_project.core.regs
@@ -241,71 +262,118 @@ async def test_step3(dut):
     assert int(pc.value) == 22
     assert int(core.waiting_for_pull.value) == 1
 
-    # Leave ReadOnly phase so we can write to signals (backdoor host push).
+    # Host pushes a byte over SPI. Leave ReadOnly before driving signals.
     await NextTimeStep()
-    core.tx_fifo[0].value = 0xBE
-    core.tx_tail.value = 1
-    core.tx_count.value = 1
+    cocotb.start_soon(spi_xfer(dut, [CMD_TX, 0xBE]))
+    while True:
+        await RisingEdge(dut.clk); await ReadOnly()
+        if int(core.waiting_for_pull.value) == 0:
+            break
 
-    # cycle 33: PULL stall service loads r6 = 0xBE, clears wait
-    await RisingEdge(dut.clk); await ReadOnly()
+    # PULL stall service loaded r6 = 0xBE
     assert int(pc.value) == 22
     assert int(regs[6].value) == 0xBE
-    assert int(core.waiting_for_pull.value) == 0
 
-    # cycle 34: JMP 0 executes — wrap back
+    # Next cycle: JMP 0 executes — wrap back
     await RisingEdge(dut.clk); await ReadOnly()
     assert int(pc.value) == 0
+
+    # The second pass pushes 0xAA again and parks at PULL. Drain over SPI,
+    # one byte per frame: ending a frame must not pop a byte nobody read.
+    await NextTimeStep()
+    await ClockCycles(dut.clk, 60)
+    assert int(core.waiting_for_pull.value) == 1
+    status, byte = await spi_xfer(dut, [CMD_RX, 0])
+    assert status & STATUS_RX_COUNT == 2
+    assert status & STATUS_IRQ
+    assert int(dut.uo_out.value) & 0b10
+    assert byte == 0xAA
+    status, byte = await spi_xfer(dut, [CMD_RX, 0])
+    assert status & STATUS_RX_COUNT == 1
+    assert byte == 0xAA
+    assert await read_status(dut) & STATUS_RX_COUNT == 0
+
+    # IRQ 3 reads back and clears.
+    _, lo, hi = await spi_xfer(dut, [CMD_IRQ, 0, 0])
+    assert (lo, hi) == (1 << 3, 0)
+    assert not await read_status(dut) & STATUS_IRQ
+    assert not int(dut.uo_out.value) & 0b10
 
 
 @cocotb.test(skip=os.environ.get("GATES") == "yes")
 async def test_sram_prog_mem(dut):
-    """256-word SRAM program memory: high addresses and the boot re-fetch.
-
-    Loads a program whose live code sits at 200-201 (beyond the old 64-word
-    flop memory), then releases rst_n on the cycle straight after the last
-    loader write. That skips the idle reset cycle the host is meant to give,
-    so the core must spend exactly one extra cycle re-fetching address 0
-    before it executes.
-    """
+    """Code above the old 64-word limit, and PROG refused while running."""
     await NextTimeStep()
     ensure_clock(dut)
-    dut.ena.value = 1
-    dut.ui_in.value = 0
-    dut.uio_in.value = 0
-    dut.rst_n.value = 0
-    await ClockCycles(dut.clk, 5)
-
-    words = [0x70C8] + [0x0000] * 199 + [0xC05A, 0x70C9]  # JMP 200; NOPs; LDI r0,0x5A; JMP 201
-    dut.ui_in.value = 0b0100
-    await ClockCycles(dut.clk, 1)
-    for w in words:
-        dut.uio_in.value = w & 0xFF
-        dut.ui_in.value = 0b0001
-        await ClockCycles(dut.clk, 1)
-        dut.uio_in.value = (w >> 8) & 0xFF
-        dut.ui_in.value = 0b0011
-        await ClockCycles(dut.clk, 1)
-    # No idle reset cycle: release immediately after the final commit.
-    dut.ui_in.value = 0
-    dut.uio_in.value = 0
-    dut.rst_n.value = 1
-
+    await _do_reset(dut)
     core = dut.user_project.core
-    # Cycle 1: re-fetch bubble — nothing issues, pc stays 0.
-    await RisingEdge(dut.clk); await ReadOnly()
-    assert int(core.pc.value) == 0
-    # Cycle 2: JMP 200.
-    await RisingEdge(dut.clk); await ReadOnly()
-    assert int(core.pc.value) == 200
-    # Cycle 3: LDI r0, 0x5A from address 200.
-    await RisingEdge(dut.clk); await ReadOnly()
-    assert int(core.pc.value) == 201
-    assert int(core.regs[0].value) == 0x5A
-    # Cycles 4-5: JMP 201 spins in place.
-    for _ in range(2):
-        await RisingEdge(dut.clk); await ReadOnly()
+
+    # JMP 200; LDI r0,0x5A at 200; JMP 201 at 201.
+    await load_program(dut, [0x70C8])
+    await load_program(dut, [0xC05A, 0x70C9], addr=200)
+
+    async def check_run():
+        await start_core(dut)
+        await RisingEdge(dut.clk); await ReadOnly()     # JMP 200
+        assert int(core.pc.value) == 200
+        await RisingEdge(dut.clk); await ReadOnly()     # LDI r0, 0x5A
         assert int(core.pc.value) == 201
+        assert int(core.regs[0].value) == 0x5A
+        for _ in range(2):                              # JMP 201 spins
+            await RisingEdge(dut.clk); await ReadOnly()
+            assert int(core.pc.value) == 201
+
+    await check_run()
+
+    # A write while running must be dropped: it would corrupt the fetch.
+    await NextTimeStep()
+    await ClockCycles(dut.clk, 20)      # let the CTRL frame finish
+    await load_program(dut, [0xC011], addr=200)
+
+    # Halt clears the core; restart must run the original program.
+    await spi_xfer(dut, [CMD_CTRL, 0])
+    assert int(core.pc.value) == 0
+    assert int(core.regs[0].value) == 0
+    await check_run()
+
+
+@cocotb.test(skip=os.environ.get("GATES") == "yes")
+async def test_host_port(dut):
+    """TX full flag, overflow drop, and unknown commands."""
+    await NextTimeStep()
+    ensure_clock(dut)
+    await _do_reset(dut)
+    core = dut.user_project.core
+
+    assert await read_status(dut) == 0
+
+    # Unknown commands are NOPs: their data must not reach the TX FIFO.
+    await spi_xfer(dut, [0xFB, 0x12])
+    assert int(core.tx_count.value) == 0
+
+    # 17 pushes: the 16th fills the FIFO, the 17th is dropped.
+    replies = await spi_xfer(dut, [CMD_TX] + list(range(1, 18)))
+    assert not replies[16] & STATUS_TX_FULL
+    assert replies[17] & STATUS_TX_FULL
+    assert int(core.tx_count.value) == 16
+
+    # A frame cut short mid-byte must not commit anything.
+    dut.ui_in.value = 0
+    await ClockCycles(dut.clk, SCK_HALF)
+    dut.ui_in.value = SCK
+    await ClockCycles(dut.clk, SCK_HALF)
+    dut.ui_in.value = CS_N
+    await ClockCycles(dut.clk, 4)
+    assert await read_status(dut) & STATUS_TX_FULL
+
+    # The core pops what the host queued, in order, over a real run.
+    # PULL r0; PUSH r0; JMP 0
+    await load_program(dut, [0xA000, 0x9000, 0x7000])
+    await spi_xfer(dut, [CMD_CTRL, 1])
+    await ClockCycles(dut.clk, 60)
+    replies = await spi_xfer(dut, [CMD_RX] + [0] * 16)
+    assert replies[0] & STATUS_RX_COUNT == 16
+    assert replies[1:] == list(range(1, 17))
 
 
 # ============================================================================
@@ -388,14 +456,16 @@ async def _do_reset(dut, initial_pin_mask=0):
     # writes are forbidden there); step out before touching any inputs.
     await NextTimeStep()
     dut.ena.value = 1
-    dut.ui_in.value = 0
+    dut.ui_in.value = CS_N
     dut.uio_in.value = initial_pin_mask & 0xFF
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 5)
+    dut.rst_n.value = 1
+    await ClockCycles(dut.clk, 2)
 
 
 async def _run_protocol(dut, name, hex_path, cycles,
-                        tx_bytes=None, pin_events=None):
+                        tx_bytes=None, pin_events=None, rx_expect=None):
     """Diff RTL against pemu_sim's golden trace cycle-for-cycle."""
     dut._log.info(f"=== protocol: {name} ({cycles} cycles) ===")
 
@@ -415,21 +485,12 @@ async def _run_protocol(dut, name, hex_path, cycles,
     golden = _load_trace(trace_path)
 
     await _do_reset(dut, initial_pin_mask=initial_mask)
-    await preload_program(dut, words)
-
-    # Restore the initial pin_in mask that preload_program clobbered.
-    dut.uio_in.value = initial_mask & 0xFF
-    dut.rst_n.value = 1
+    await load_program(dut, words)
+    if tx_bytes:
+        await spi_xfer(dut, [CMD_TX] + tx_bytes)
 
     core = dut.user_project.core
-    if tx_bytes:
-        # Backdoor TX preload — must happen in the same delta as rst_n=1 so the
-        # first posedge sees rst_n=1 (reset branch off) with tx state loaded.
-        for i, b in enumerate(tx_bytes):
-            core.tx_fifo[i].value = b
-        core.tx_head.value  = 0
-        core.tx_tail.value  = len(tx_bytes) & 0xF
-        core.tx_count.value = len(tx_bytes)
+    await start_core(dut)
 
     for i in range(cycles):
         cyc = i + 1
@@ -458,6 +519,13 @@ async def _run_protocol(dut, name, hex_path, cycles,
                 f"out=0x{rtl_out8:02x} oe=0x{rtl_oe8:02x}"
             )
 
+    if rx_expect:
+        # The byte must reach the host through the pins, IRQ line included.
+        await NextTimeStep()
+        assert int(dut.uo_out.value) & 0b10
+        replies = await spi_xfer(dut, [CMD_RX] + [0] * len(rx_expect))
+        assert replies[1:] == rx_expect, f"{name}: host read {replies[1:]}"
+
     dut._log.info(f"{name}: {cycles} cycles match")
 
 
@@ -475,12 +543,12 @@ def _uart_rx_events(byte, start_cycle=10, bit_period=434, rx_pin=3):
     events.append((start_cycle + bit_period * 9, idle))
     return events
 
-# Protocol configs: (name, hex-file, cycles, tx-bytes, pin-events)
+# Protocol configs: (name, hex-file, cycles, tx-bytes, pin-events, rx-expect)
 _PROTOCOLS = [
-    ("uart_tx",   _REPO_ROOT / "programs" / "uart_tx.hex",    500, [0x55], None),
-    ("spi",       _REPO_ROOT / "programs" / "spi.hex",        400, [0xA5], None),
-    ("i2c_write", _REPO_ROOT / "programs" / "i2c_write.hex", 1000, [0xA0], [(0, 0x18)]),
-    ("uart_rx",   _REPO_ROOT / "programs" / "uart_rx.hex",   4400, None,   _uart_rx_events(0x55)),
+    ("uart_tx",   _REPO_ROOT / "programs" / "uart_tx.hex",    500, [0x55], None, None),
+    ("spi",       _REPO_ROOT / "programs" / "spi.hex",        400, [0xA5], None, None),
+    ("i2c_write", _REPO_ROOT / "programs" / "i2c_write.hex", 1000, [0xA0], [(0, 0x18)], None),
+    ("uart_rx",   _REPO_ROOT / "programs" / "uart_rx.hex",   4400, None,   _uart_rx_events(0x55), [0x55]),
 ]
 
 
@@ -495,7 +563,7 @@ def _pre_generate_all_traces():
     if binary is None:
         return                       # Test will surface a helpful error later.
     _TRACE_DIR.mkdir(exist_ok=True)
-    for name, hex_path, cycles, tx_bytes, pin_events in _PROTOCOLS:
+    for name, hex_path, cycles, tx_bytes, pin_events, _ in _PROTOCOLS:
         trace_path = _TRACE_DIR / f"{name}.trace.tsv"
         cmd = [str(binary), str(hex_path), str(trace_path), str(cycles)]
         if tx_bytes:
@@ -521,6 +589,6 @@ async def test_protocols(dut):
     # Prior test ends in the ReadOnly phase; leave it before touching signals.
     await NextTimeStep()
     ensure_clock(dut)
-    for name, hex_path, cycles, tx_bytes, pin_events in _PROTOCOLS:
-        await _run_protocol(dut, name, hex_path, cycles,
-                            tx_bytes=tx_bytes, pin_events=pin_events)
+    for name, hex_path, cycles, tx_bytes, pin_events, rx_expect in _PROTOCOLS:
+        await _run_protocol(dut, name, hex_path, cycles, tx_bytes=tx_bytes,
+                            pin_events=pin_events, rx_expect=rx_expect)

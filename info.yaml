@@ -16,24 +16,23 @@ project:
   source_files:
     - "project.v"
     - "pemu_core.v"
+    - "pemu_host.v"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 pinout:
-  # Dedicated inputs — reserved for the program loader while rst_n=0.
-  # After reset is released, ui[3..7] are ignored; ui[0..2] are also
-  # only meaningful during the load phase.
-  ui[0]: "prog_we (loader write strobe, rst_n=0 only)"
-  ui[1]: "prog_hi (loader byte-half select, 0=low 1=high)"
-  ui[2]: "prog_rst (loader address reset)"
+  # Dedicated inputs — the SPI host port (mode 0, SCK at most clk/8).
+  ui[0]: "host SCK"
+  ui[1]: "host MOSI"
+  ui[2]: "host CS_N (idle high)"
   ui[3]: ""
   ui[4]: ""
   ui[5]: ""
   ui[6]: ""
   ui[7]: ""
 
-  # Dedicated outputs — not currently used, tied to 0.
-  uo[0]: ""
-  uo[1]: ""
+  # Dedicated outputs — host port. uo[2..7] are tied to 0.
+  uo[0]: "host MISO"
+  uo[1]: "IRQ (high while any IRQ line is set)"
   uo[2]: ""
   uo[3]: ""
   uo[4]: ""
@@ -42,7 +41,6 @@ pinout:
   uo[7]: ""
 
   # Bidirectional pins — programmable I/O the running program drives/reads.
-  # During load (rst_n=0), uio_in doubles as the program-byte data bus.
   uio[0]: "pin 0 (uart_tx TX, spi SCK)"
   uio[1]: "pin 1 (spi MOSI)"
   uio[2]: "pin 2 (spi MISO)"

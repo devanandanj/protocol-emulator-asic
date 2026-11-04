@@ -24,21 +24,21 @@ module tt_um_devanandanj_pemu (
   assign pin_in = uio_in;
   assign uio_out  = pin_out;
   assign uio_oe   = pin_oe;
-  assign uo_out   = 8'b0;
+  wire       host_miso;
+  wire       irq_pending;
+  assign uo_out = {6'b0, irq_pending, host_miso};
 
-  // Program loader control lives on the dedicated inputs. uio_in doubles as
-  // the load-data byte while rst_n=0 (no pin traffic happens in reset), then
-  // reverts to pin_in[7:0] during run.
   pemu_core core(
     .clk(clk),
     .rst_n(rst_n),
     .pin_in(pin_in),
     .pin_out(pin_out),
     .pin_oe(pin_oe),
-    .prog_we(ui_in[0]),
-    .prog_hi(ui_in[1]),
-    .prog_rst(ui_in[2]),
-    .prog_data(uio_in)
+    .host_sck(ui_in[0]),
+    .host_mosi(ui_in[1]),
+    .host_cs_n(ui_in[2]),
+    .host_miso(host_miso),
+    .irq_pending(irq_pending)
   );
 
   // List all unused inputs to prevent warnings

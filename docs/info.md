@@ -21,10 +21,10 @@ in one cycle unless it explicitly waits (`DELAY`, `WAIT`, and a blocking
 `PULL` when the TX FIFO is empty). Pin-level opcodes drive an 8-bit
 `pin_out` / `pin_oe` bus wired to the `uio[7:0]` bidirectional pads.
 
-At boot, the host holds `rst_n` low and shifts the 16-bit program
-words into memory via a three-wire loader interface (`ui[0..2]` for
-control, `uio[7:0]` for data — see the pinout below). Releasing
-`rst_n` runs the program from address 0.
+At boot, the core is halted. The host writes the program into memory
+over a small SPI port on `ui[0..2]` / `uo[0]`, then sets the run bit,
+and the program starts from address 0. The same port feeds the TX FIFO,
+drains the RX FIFO, and reads the IRQ lines while the program runs.
 
 Four example protocols ship in `programs/`:
 `uart_tx.pemu`, `uart_rx.pemu` (both 8N1 @ 115200 baud),
@@ -39,18 +39,15 @@ pin_out, pin_oe)` match on every clock edge.
 After the design is fabricated and mounted on a Tiny Tapeout dev board:
 
 1. Power the board and select this project via the TT commander.
-2. Assert `rst_n` low; assert `ui[2]` (`prog_rst`) high for one clock to
-   zero the load address; deassert `ui[2]`.
-3. For each 16-bit program word, present the low byte on `uio_in`, set
-   `ui[1]` (`prog_hi`) low, and pulse `ui[0]` (`prog_we`) high for one
-   clock. Then present the high byte on `uio_in`, set `prog_hi` high,
-   and pulse `prog_we` again. The load address auto-increments.
-4. Hold `rst_n` low for at least one more clock with `prog_we` low (the
-   SRAM reads address 0 here), then release `rst_n`. The core fetches
-   from address 0. Releasing reset straight after the last write still
-   works but costs one extra cycle before the first instruction.
+2. Pulse `rst_n` low. The core is now halted.
+3. Connect an SPI master (mode 0, SCK at most `clk/8`) to `ui[0]` (SCK),
+   `ui[1]` (MOSI), `ui[2]` (CS_N, idle high) and `uo[0]` (MISO). Send one
+   frame: `0x02`, `0x00`, then each 16-bit program word low byte first.
+4. Optionally queue bytes with a `0x03` frame, then send `0x01 0x01` to
+   start the core. `0x01 0x00` stops it. The full command list is in
+   `docs/architecture.md`.
 5. Program behaviour: `uart_tx.pemu` transmits any byte pushed into the
-   TX FIFO (via a host write to the FIFO seam) as an 8N1 UART frame on
+   TX FIFO (a `0x03` frame) as an 8N1 UART frame on
    `uio[0]`; `spi.pemu` clocks SCK on `uio[0]`, drives MOSI on `uio[1]`,
    and samples MISO on `uio[2]`; `i2c_write.pemu` drives SDA on `uio[3]`
    and SCL on `uio[4]` open-drain. Details in each `.pemu` file's

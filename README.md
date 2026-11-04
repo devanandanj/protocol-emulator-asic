@@ -18,9 +18,10 @@ JTAG, or slow-USB — just by loading a different program at boot.
 - **15-opcode ISA** (see [docs/isa.md](docs/isa.md)) with a 12-bit PC,
   eight 8-bit general-purpose registers, and two 16-deep FIFOs on the
   host seam.
-- **Verilog RTL** — `src/pemu_core.v` (the core) + `src/project.v` (the
-  Tiny Tapeout wrapper). 256-word SRAM program memory (IHP SRAM macro) loaded at boot via a
-  three-wire loader on `ui[0..2]` + `uio_in`.
+- **Verilog RTL** — `src/pemu_core.v` (the core), `src/pemu_host.v` (the
+  SPI host port) and `src/project.v` (the Tiny Tapeout wrapper). 256-word
+  SRAM program memory (IHP SRAM macro), loaded over the host port, which
+  also carries FIFO data and run control.
 - **Cycle-accurate C++ model** (`model/`) — the golden reference the
   RTL is verified against.
 - **Assembler** (`asm/`) — turns `.pemu` mnemonics into 16-bit words.
@@ -30,7 +31,8 @@ JTAG, or slow-USB — just by loading a different program at boot.
 
 ## Verification story
 
-`test/test.py` runs two tests inside cocotb:
+`test/test.py` drives the chip only through its pins, using the SPI
+host port. Its two main tests are:
 
 1. `test_step3` — a hand-written ISA walk that exercises every opcode
    at least once (34 clocks, direct assertions on `pc`, regs, and

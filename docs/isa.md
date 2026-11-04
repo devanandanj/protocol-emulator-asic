@@ -172,8 +172,8 @@ they explicitly wait.
   direction. Named from the host's perspective: the host reads
   from RX.
 - RX FIFO is bounded at `kFifoSize` (16 entries in v0.1). Push
-  onto a full FIFO throws in the model. In the RTL this maps to
-  a "FIFO full" IRQ or a program-visible flag; deferred to Phase 2.
+  onto a full FIFO throws in the model. The RTL drops the byte;
+  the host can watch `rx_count` in the status byte.
 - 1 cycle.
 
 ### PULL encoding detail
@@ -192,7 +192,7 @@ they explicitly wait.
 
 - `n` at [11:8], range 0..15. Bits [7:0] reserved.
 - Sets bit `n` of the host-visible `irq_lines` register. Latching:
-  the bit stays set until the host calls `clear_irq(n)`.
+  the bit stays set until the host reads it over the host port.
 - Multiple IRQ opcodes accumulate independent bits (bitmask OR).
   Clearing a bit that isn't set — or an out-of-range index — is a
   silent no-op.
@@ -235,9 +235,8 @@ they explicitly wait.
 - **Clock divider** — no dedicated prescaler. `DELAY` covers every
   timing budget we care about, saves a shared piece of state, and keeps
   each program self-contained about its own cycle math.
-- **Loader path** — bootstrap on `ui[0..2]` + `uio_in[7:0]` while
-  `rst_n=0` (see `architecture.md`). Two-byte writes per instruction,
-  auto-incrementing address.
+- **Host path** — one SPI port on `ui[0..2]` / `uo[0..1]` loads programs,
+  feeds and drains the FIFOs, and starts the core (see `architecture.md`).
 - **Open-drain drive** — `OUT_OD` opcode (0xE). Bit 0 == 0 drives low
   (OE=1); bit 0 == 1 releases (OE=0). Matches I²C SDA/SCL semantics
   without a separate mode register.

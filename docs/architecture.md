@@ -7,9 +7,9 @@ Block diagram of the shipped v1 core. The ISA table lives in
                    +----------------------------------+
                    |            PEmu core             |
                    |                                  |
-   host <--PULL----|  TX FIFO (16 x 8)  --+           |
-   host ---PUSH--->|  RX FIFO (16 x 8)  --+           |
-   host ---PROG--->|  program mem SRAM (256 x 16)     |
+   SPI  <-- host --|  RX FIFO (16 x 8)  --+           |
+   host     port ->|  TX FIFO (16 x 8)  --+           |
+   (ui/uo)      -->|  program mem SRAM (256 x 16)     |
                    |     |                            |
                    |     v                            |
                    |    IFETCH --> DECODE --> EXEC    |
@@ -25,15 +25,55 @@ Block diagram of the shipped v1 core. The ISA table lives in
                                     uio [7:0]
 ```
 
-## Loader path
+## Host port
 
-The program-memory bootstrap uses the three dedicated inputs `ui[0..2]`
-while `rst_n=0` and multiplexes `uio_in[7:0]` as the byte-wide data bus.
-`ui[0]` (`prog_we`) is a per-byte write strobe, `ui[1]` (`prog_hi`) picks
-which half of the 16-bit word to write (low first, then high commits the
-word and increments the load address), and `ui[2]` (`prog_rst`) forces
-the load address back to 0. During run (`rst_n=1`) all loader signals
-are ignored and `uio_in` reverts to `pin_in`.
+`src/pemu_host.v` is the chip's only path to program memory, the FIFOs,
+the IRQ lines and run control. It is an SPI mode 0 slave, MSB first,
+with SCK at most `clk/8` (6.25 MHz at 50 MHz):
+
+| Pin     | Signal                                  |
+|---------|-----------------------------------------|
+| `ui[0]` | SCK                                     |
+| `ui[1]` | MOSI                                    |
+| `ui[2]` | CS_N (keep high when idle)              |
+| `uo[0]` | MISO                                    |
+| `uo[1]` | IRQ: high while any IRQ line is set     |
+
+A frame is CS_N low, one command byte, then data bytes. Unknown
+commands act as `NOP`.
+
+| Byte   | Command | Data                                                     |
+|--------|---------|----------------------------------------------------------|
+| `0x00` | NOP     | none; use it to read status                              |
+| `0x01` | CTRL    | one byte: bit 0 sets `run`                               |
+| `0x02` | PROG    | start address, then low/high byte pairs (auto-increment) |
+| `0x03` | TX      | bytes appended to the TX FIFO                            |
+| `0x04` | RX      | send dummy bytes; each returns one RX FIFO byte          |
+| `0x05` | IRQ     | send two dummy bytes; returns `irq[7:0]`, `irq[15:8]`    |
+
+Every byte not returning data returns the status byte, including the
+command byte itself:
+
+```
+{run, irq_pending, tx_full, rx_count[4:0]}
+```
+
+- `rst_n` halts the core and clears the FIFOs and IRQ lines. The core
+  stays halted until the host sets `run`.
+- Clearing `run` resets the core (PC, registers, pins) but keeps the
+  FIFOs and IRQ lines, so a host can preload TX before starting and
+  drain RX after stopping.
+- PROG writes are dropped while running, since they would corrupt
+  instruction fetch.
+- TX bytes pushed while `tx_full` is set are dropped. RX bytes pushed by
+  the core when RX is full are dropped too. Read only `rx_count` bytes:
+  an RX read of an empty FIFO returns 0.
+- IRQ clears exactly the bits it returned, so a bit raised during the
+  read stays set for the next one.
+
+Chosen over a parallel bus because `ui` has too few pins for a data byte
+plus strobes, and over a separate loader because one port covers
+loading and run-time data. `uio` stays free for the protocol pins.
 
 ## Program memory
 
@@ -49,15 +89,8 @@ executes it. Issue stays single-cycle and matches the C++ model
 cycle-for-cycle. Stalls (DELAY, WAIT, PULL) keep `pc_next == pc`, so
 the SRAM simply re-reads the same word.
 
-A loader commit is a write, so `A_DOUT` is stale afterwards. The
-last reset cycle should be idle (no commit) so the SRAM reads
-address 0. A one-bit `fetch_valid` flag covers hosts that skip this.
-The core then spends one extra cycle re-fetching before it executes.
-
-Chosen over an SPI-slave loader block (saves the extra state machine)
-and over a memory-mapped host interface (TT gives us no wide bus). The
-core is held in reset the whole time the host is streaming, so no
-run-time contention on `uio_in`.
+While halted, `pc_next` is 0, so `A_DOUT` already holds address 0 when
+`run` rises and the first instruction issues on the next clock.
 
 ## Concurrency
 
@@ -71,7 +104,6 @@ natural v2.
 
 Single 50 MHz clock from the pad. No internal prescaler — timing is
 firmware-controlled via `DELAY`, which is cheap and lets the same
-opcode encoding work at any target clock. All inputs are registered by
-their consumers before observation, so no CDC is required inside the
-core.
+opcode encoding work at any target clock. Host port pins pass through a
+two-flop synchronizer. Protocol pins are sampled directly by the core.
 
