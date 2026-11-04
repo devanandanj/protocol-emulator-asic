@@ -334,6 +334,12 @@ u16 encode_ext_rr(u32 sub, const std::vector<std::string>& ops, const char* mnem
     return static_cast<u16>((u16{0xF} << 12) | (sub << 8) | (a << 4) | b);
 }
 
+u16 encode_ext_r(u32 sub, const std::vector<std::string>& ops, const char* mnemonic) {
+    require_operand_count(ops, 1, mnemonic, "reg");
+    const u32 a = parse_register(ops[0]);
+    return static_cast<u16>((u16{0xF} << 12) | (sub << 8) | (a << 4));
+}
+
 u16 encode_skp(const std::vector<std::string>& ops) {
     require_operand_count(ops, 2, "SKP", "pin, val");
     const u32 pin = parse_number(ops[0]);
@@ -410,6 +416,8 @@ AssembleResult assemble(std::istream& in) {
             else if (m == "add")   word = encode_ext_rr(0x3, line.operands, "ADD");
             else if (m == "skeq")  word = encode_ext_rr(0x4, line.operands, "SKEQ");
             else if (m == "skp")   word = encode_skp(line.operands);
+            else if (m == "cycl")  word = encode_ext_r(0x6, line.operands, "CYCL");
+            else if (m == "cych")  word = encode_ext_r(0x7, line.operands, "CYCH");
             else throw std::runtime_error("unknown mnemonic '" + m + "'");
             r.words.push_back(word);
         } catch (const std::exception& e) {

@@ -867,6 +867,7 @@ _PROTOCOLS = [
     ("spi",       _REPO_ROOT / "programs" / "spi.hex",        400, [0xA5], None, None, None),
     ("i2c_write", _REPO_ROOT / "programs" / "i2c_write.hex", 1000, [0xA0], [(0, 0x18)], None, None),
     ("ext_test",  _REPO_ROOT / "programs" / "ext_test.hex",     80, None,   [(2, 0x08), (8, 0), (27, 0x08), (44, 0), (56, 0x08), (70, 0)], None, None),
+    ("cyctest",   _REPO_ROOT / "programs" / "cyctest.hex",       30, None,   None, None, None),
     ("uart_rx",   _REPO_ROOT / "programs" / "uart_rx.hex",   4400, None,   _uart_rx_events(0x55), [0x55], None),
     ("ps2",       _REPO_ROOT / "programs" / "ps2.hex", _PS2_CYCLES, None, _PS2_EVENTS, [0xA5, 0x00, 0x5A], 0b11),
 ]

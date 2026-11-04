@@ -1,0 +1,10 @@
+; Exercises the cycle-counter read ops CYCL/CYCH. Not a protocol: test_protocols
+; runs it to confirm the RTL counter and the model's cycle count agree every
+; cycle. r0/r1 snapshot the counter early; r2 re-reads it live in a loop, so a
+; one-cycle drift between RTL and model would show up in the register diff.
+
+        nop
+        cycl  r0               ; r0 = counter[7:0] at this cycle
+        cych  r1               ; r1 = counter[15:8]
+loop:   cycl  r2               ; live low byte, updated every 2 cycles
+        jmp   loop

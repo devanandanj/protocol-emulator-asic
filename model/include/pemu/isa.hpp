@@ -50,6 +50,8 @@ enum class ExtOp : std::uint8_t {
     Add  = 0x3,   // regs[a] += regs[b], wrapping at 8 bits
     Skeq = 0x4,   // skip next instruction if regs[a] == regs[b]
     Skp  = 0x5,   // skip next if synchronized pin a == bit 0 of the word
+    Cycl = 0x6,   // regs[a] = cycle counter [7:0]
+    Cych = 0x7,   // regs[a] = cycle counter [15:8]
 };
 
 inline constexpr std::size_t kNumRegs      = 8;

@@ -69,8 +69,16 @@ loops stay cycle-exact.
 | `ADD ra,rb`  | 0x3 | `regs[a] += regs[b]`, wrapping at 8 bits                   |
 | `SKEQ ra,rb` | 0x4 | Skip the next instruction if `regs[a] == regs[b]`          |
 | `SKP p,v`    | 0x5 | Skip the next instruction if synchronized pin `p` equals `v` (`a` = pin 0–7, `b` bit 0 = value) |
+| `CYCL ra`    | 0x6 | `regs[a] = cycle counter [7:0]`                            |
+| `CYCH ra`    | 0x7 | `regs[a] = cycle counter [15:8]`                          |
 
-Sub-ops 0x6–0xF are reserved. The RTL freezes `pc` on them; the model
+The cycle counter is a free-running 16-bit count of running cycles (stalls
+included). It holds across a halt and clears only on reset, matching the C++
+model. Read it twice and subtract to time how long a target took to respond;
+a constant offset cancels, so only the difference is meaningful, and it wraps
+every 65536 cycles.
+
+Sub-ops 0x8–0xF are reserved. The RTL freezes `pc` on them; the model
 throws.
 
 Unlike `IN` and `WAIT`, `SKP` does not release the pin's OE.

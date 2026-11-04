@@ -48,6 +48,8 @@ module pemu_core (
   localparam [3:0] EXT_ADD   = 4'h3;
   localparam [3:0] EXT_SKEQ  = 4'h4;
   localparam [3:0] EXT_SKP   = 4'h5;
+  localparam [3:0] EXT_CYCL  = 4'h6;   // regs[a] = cycle counter [7:0]
+  localparam [3:0] EXT_CYCH  = 4'h7;   // regs[a] = cycle counter [15:8]
 
   // Program memory — 256 words × 16 bits in IHP's single-port SRAM macro.
   // Written through the host port while the core is halted. No initial
@@ -139,6 +141,16 @@ always @(posedge clk) begin
     pin_s2 <= pin_s1;
 end
 
+// Free-running cycle counter, readable with EXT_CYCL/EXT_CYCH. Counts every
+// running cycle (stalls included), holds across a halt, clears only on reset —
+// so it mirrors the C++ model's own cycle count. Programs read it twice and
+// subtract to time a target's response.
+reg [15:0] cyc;
+always @(posedge clk) begin
+    if (!rst_n)       cyc <= 16'd0;
+    else if (core_en) cyc <= cyc + 16'd1;
+end
+
 // Any cycle in which no instruction issues and pc holds.
 wire stalled = waiting_for_pin || (stall_remaining > 12'd0) || waiting_for_pull;
 
@@ -227,7 +239,7 @@ always @(*) begin
                                  ? {4'd0, operand[7:0]} : pc + 12'd1;
             OP_EXT: begin
                 case (ext_op)
-                    EXT_XOR, EXT_AND, EXT_OR, EXT_ADD:
+                    EXT_XOR, EXT_AND, EXT_OR, EXT_ADD, EXT_CYCL, EXT_CYCH:
                              pc_next_r = pc + 12'd1;
                     EXT_SKEQ: pc_next_r = pc + ((ext_a == ext_b) ? 12'd2 : 12'd1);
                     EXT_SKP:  pc_next_r = pc + ((pin_s2[operand[6:4]] == operand[0])
@@ -392,7 +404,9 @@ always @(posedge clk) begin
                     EXT_XOR: regs[operand[6:4]] <= ext_a ^ ext_b;
                     EXT_AND: regs[operand[6:4]] <= ext_a & ext_b;
                     EXT_OR:  regs[operand[6:4]] <= ext_a | ext_b;
-                    EXT_ADD: regs[operand[6:4]] <= ext_a + ext_b;
+                    EXT_ADD:  regs[operand[6:4]] <= ext_a + ext_b;
+                    EXT_CYCL: regs[operand[6:4]] <= cyc[7:0];
+                    EXT_CYCH: regs[operand[6:4]] <= cyc[15:8];
                     default: begin
                     end
                 endcase

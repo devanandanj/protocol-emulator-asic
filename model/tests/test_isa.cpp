@@ -637,10 +637,19 @@ void ext_skp_sees_pin_two_cycles_late() {
 }
 
 void ext_unknown_subop_throws() {
-    pemu::Core c({0xF600});
+    pemu::Core c({0xF800});   // sub-op 0x8 is reserved
     bool threw = false;
     try { c.step(); } catch (const std::runtime_error&) { threw = true; }
     assert(threw);
+}
+
+void ext_cyc_reads_running_cycle_count() {
+    // NOP x3, then CYCL r0, CYCH r1. The reads run on cycles 3 and 4, so the
+    // counter holds 3 then 4 (prior completed cycles). High byte stays 0.
+    pemu::Core c({0x0000, 0x0000, 0x0000, 0xF600, 0xF710});  // CYCL r0, CYCH r1
+    c.run(5);
+    assert(c.regs()[0] == 3);
+    assert(c.regs()[1] == 0);
 }
 
 } // namespace
@@ -719,6 +728,7 @@ int main() {
     ext_skeq_skips_only_when_equal();
     ext_skp_sees_pin_two_cycles_late();
     ext_unknown_subop_throws();
+    ext_cyc_reads_running_cycle_count();
 
     std::cout << "pemu_model_tests: all tests passed\n";
     return 0;

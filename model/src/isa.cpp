@@ -275,6 +275,10 @@ void Core::step() {
                 case ExtOp::Skp:
                     pc_ = static_cast<u16>(pc_ + (((pin_synced >> a) & 0x1u) == (b & 0x1u) ? 2u : 1u));
                     break;
+                // cycles_ here is the count of prior completed cycles, the same
+                // value the RTL counter holds before this edge — they stay in step.
+                case ExtOp::Cycl: regs_[a] = static_cast<u8>(cycles_ & 0xFFu);        ++pc_; break;
+                case ExtOp::Cych: regs_[a] = static_cast<u8>((cycles_ >> 8) & 0xFFu); ++pc_; break;
                 default:
                     throw std::runtime_error("PEmu: unknown extended sub-op");
             }

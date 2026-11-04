@@ -209,6 +209,11 @@ void ext_encoding() {
     assert(r.ok());
     assert(r.words == (std::vector<std::uint16_t>{0xF001, 0xF123, 0xF245, 0xF367, 0xF412, 0xF531}));
 }
+void cyc_encoding() {
+    auto r = asm_str("cycl r0\ncych r1\n");
+    assert(r.ok());
+    assert(r.words == (std::vector<std::uint16_t>{0xF600, 0xF710}));
+}
 
 void skp_rejects_pin_and_val_out_of_range() {
     assert(!asm_str("skp 8, 1").ok());
@@ -239,6 +244,7 @@ int main() {
     out_od_encoding();
     ext_encoding();
     skp_rejects_pin_and_val_out_of_range();
+    cyc_encoding();
     // error cases
     register_out_of_range_reports_error();
     wrong_operand_count_reports_error();
