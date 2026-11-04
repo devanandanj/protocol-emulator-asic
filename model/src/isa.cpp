@@ -50,7 +50,7 @@ void Core::step() {
     pin_s1_ = pin_in_;
 
     if (waiting_for_pin_) {
-        const u32 curr = (pin_in_ >> wait_pin_) & 0x1u;
+        const u32 curr = (pin_synced >> wait_pin_) & 0x1u;
         if (curr == static_cast<u32>(wait_val_)) {
             waiting_for_pin_ = false;
             wait_forever_    = false;
@@ -141,7 +141,7 @@ void Core::step() {
             check_reg_in_range(reg);
             const u32 mask = u32{1} << pin;
             pin_oe_ &= ~mask;
-            const u32 bit = (pin_in_ >> pin) & 0x1u;
+            const u32 bit = (pin_synced >> pin) & 0x1u;
             regs_[reg] = static_cast<u8>((regs_[reg] & 0xFEu) | bit);
             ++pc_;
             break;
@@ -153,7 +153,7 @@ void Core::step() {
             const u32 timeout = ins.operand & 0x7Fu;
             const u32 mask = u32{1} << pin;
             pin_oe_ &= ~mask;
-            const u32 curr = (pin_in_ >> pin) & 0x1u;
+            const u32 curr = (pin_synced >> pin) & 0x1u;
             if (curr == val) {
                 //
             }

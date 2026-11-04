@@ -129,8 +129,9 @@ wire[3:0]  ext_op   = operand[11:8];
 wire[7:0]  ext_a    = regs[operand[6:4]];
 wire[7:0]  ext_b    = regs[operand[2:0]];
 
-// SKP feeds pc_next and so the SRAM address: a raw pin changing at the clock
-// edge could resolve differently per address bit and fetch a wild address.
+// Every pin read goes through this synchronizer. Pins are asynchronous, and
+// IN, WAIT and SKP fan out to several flops or the SRAM address: a raw pin
+// changing at the clock edge could resolve differently at each one.
 reg [7:0] pin_s1;
 reg [7:0] pin_s2;
 always @(posedge clk) begin
@@ -257,7 +258,7 @@ always @(posedge clk) begin
         for (j = 0; j < 8; j = j + 1) regs[j] <= 8'd0;
     end else if (waiting_for_pin) begin
         // WAIT stall service — check condition each cycle
-        if (pin_in[wait_pin] == wait_val) begin
+        if (pin_s2[wait_pin] == wait_val) begin
             waiting_for_pin <= 1'b0;
             wait_forever    <= 1'b0;
             stall_remaining <= 12'd0;
@@ -306,9 +307,9 @@ always @(posedge clk) begin
             end
             OP_IN: begin
                 // IN releases the pin's OE (mirror of the C++ model) then
-                // samples pin_in into bit 0 of regs[r].
+                // samples the synchronized pin into bit 0 of regs[r].
                 pin_oe[operand[10:8]] <= 1'b0;
-                regs[operand[6:4]] <= {regs[operand[6:4]][7:1], pin_in[operand[10:8]]};
+                regs[operand[6:4]] <= {regs[operand[6:4]][7:1], pin_s2[operand[10:8]]};
             end
             OP_SHIFT: begin
                 if(operand[7]) begin
@@ -338,7 +339,7 @@ always @(posedge clk) begin
             OP_WAIT: begin
                 // operand: pin[11:8], val[7], timeout[6:0]
                 pin_oe[operand[10:8]] <= 1'b0;   // release OE like IN
-                if (pin_in[operand[10:8]] == operand[7]) begin
+                if (pin_s2[operand[10:8]] == operand[7]) begin
                     // condition met at issue — 1 cycle total, no stall
                 end else if (operand[6:0] == 7'd0) begin
                     // timeout=0 → wait forever

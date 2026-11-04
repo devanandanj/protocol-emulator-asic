@@ -271,8 +271,10 @@ void wait_exits_early_when_pin_matches_mid_stall() {
     c.step();                                     // cycle 1: WAIT issues, fail
     c.step();                                     // cycle 2: stall, fail
     c.set_pin_in(1u << 3);                        // external event
-    c.step();                                     // cycle 3: check succeeds
-    assert(c.snapshot().cycle == 3);
+    c.step();                                     // cycle 3: synchronizer still low
+    c.step();                                     // cycle 4: still low
+    c.step();                                     // cycle 5: check succeeds
+    assert(c.snapshot().cycle == 5);
     assert(c.snapshot().pc == 1);
     c.step();
     assert(c.snapshot().pc == 2);                 // NOP fetched
@@ -284,10 +286,10 @@ void wait_forever_with_timeout_zero_never_times_out() {
     for (int i = 0; i < 100; ++i) c.step();
     assert(c.snapshot().cycle == 100);
     assert(c.snapshot().pc == 1);                 // PC advanced past WAIT at issue
-    // Flip pin; next step exits.
+    // Flip pin; the exit comes after the two-cycle synchronizer delay.
     c.set_pin_in(1u << 3);
-    c.step();
-    assert(c.snapshot().cycle == 101);
+    for (int i = 0; i < 3; ++i) c.step();
+    assert(c.snapshot().cycle == 103);
 }
 
 void wait_releases_oe_on_pin_at_issue() {

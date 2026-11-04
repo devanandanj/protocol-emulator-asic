@@ -104,6 +104,6 @@ natural v2.
 
 Single 50 MHz clock from the pad. No internal prescaler — timing is
 firmware-controlled via `DELAY`, which is cheap and lets the same
-opcode encoding work at any target clock. Host port pins pass through a
-two-flop synchronizer. Protocol pins are sampled directly by the core.
+opcode encoding work at any target clock. Host port pins and protocol pins each
+pass through a two-flop synchronizer.
 

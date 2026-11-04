@@ -73,11 +73,16 @@ loops stay cycle-exact.
 Sub-ops 0x6–0xF are reserved. The RTL freezes `pc` on them; the model
 throws.
 
-`SKP` reads the pin through a two-flop synchronizer, so it sees the
-pin as it was two cycles earlier (`IN` and `WAIT` read it directly).
-The result picks the next SRAM address, and an unsynchronized pin
-changing at the clock edge could corrupt that address. Unlike `IN`
-and `WAIT`, `SKP` does not release the pin's OE.
+Unlike `IN` and `WAIT`, `SKP` does not release the pin's OE.
+
+### Pin sampling
+
+`IN`, `WAIT` and `SKP` all read pins through a two-flop synchronizer,
+so they see each pin as it was two cycles earlier. Pins are asynchronous
+to the core clock, and without this a pin changing at the clock edge
+could corrupt the next SRAM address or leave `WAIT` half-updated.
+A program that releases a line and reads it back must allow for the
+delay: wait at least 2 cycles after the release.
 
 
 ### SET encoding detail
