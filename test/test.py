@@ -708,6 +708,158 @@ def _jtag_protocol(name, bits, rx_expect):
     return (name, hex_path, cycles, tx_bytes, events, rx_expect, 0b1)
 
 
+_SWD_IDCODE = 0x2BA01477
+_SWD_ACK_OK, _SWD_ACK_WAIT = 0b001, 0b010
+
+
+def _swd_request(ap, rnw, addr):
+    a2, a3 = (addr >> 2) & 1, (addr >> 3) & 1
+    bits = [1, ap, rnw, a2, a3, ap ^ rnw ^ a2 ^ a3, 0, 1]
+    return sum(b << i for i, b in enumerate(bits))
+
+
+def _parity(value):
+    return bin(value).count("1") & 1
+
+
+class _SwdTarget:
+    """Far-end SWD target: DP registers, line reset, WAIT and bad parity.
+
+    script holds what to do on each coming SWCLK rising edge: a bit to drive,
+    None to release SWDIO, "skip" for a turnaround, or "sample" for write data.
+    """
+
+    def __init__(self, waits=0, bad_read_parity=False):
+        self.regs = {0x0: _SWD_IDCODE}
+        self.waits = waits
+        self.bad_read_parity = bad_read_parity
+        self.errors = []
+        self.ones = 0
+        self.active = False     # needs a line reset first
+        self.armed = False      # needs a low bit after the reset
+        self.request = []
+        self.script = []
+        self.write_bits = []
+        self.write_addr = 0
+        self.drive = None
+
+    def rising(self, host):
+        """host is the SWDIO bit the chip drives, or None if released."""
+        if self.script:
+            step = self.script.pop(0)
+            if step != "sample" and host is not None:
+                self.errors.append("chip drove SWDIO during the target's turn")
+            if step == "sample":
+                self.write_bits.append(host)
+                if len(self.write_bits) == 33:
+                    self._finish_write()
+            elif step != "skip":
+                self.drive = step
+            return
+
+        self.ones = self.ones + 1 if host == 1 else 0
+        if self.ones >= 50:
+            self.active, self.armed, self.request = True, False, []
+            return
+        if not self.active:
+            return
+        if not self.armed:
+            self.armed = host == 0
+            return
+        if self.request or host == 1:
+            self.request.append(host)
+        if len(self.request) == 8:
+            self._decode(self.request)
+            self.request = []
+
+    def _decode(self, bits):
+        start, ap, rnw, a2, a3, parity, stop, park = bits
+        if None in bits or (start, stop, park) != (1, 0, 1):
+            self.errors.append(f"bad request framing {bits}")
+            return
+        if ap ^ rnw ^ a2 ^ a3 != parity:
+            self.errors.append(f"bad request parity {bits}")
+            return
+        addr = a2 << 2 | a3 << 3
+        if self.waits:
+            self.waits -= 1
+            ack = _SWD_ACK_WAIT
+        else:
+            ack = _SWD_ACK_OK
+        steps = [(ack >> i) & 1 for i in range(3)]
+        if ack != _SWD_ACK_OK:
+            steps += [None, "skip"]
+        elif rnw:
+            value = self.regs.get(addr, 0)
+            parity = _parity(value) ^ int(self.bad_read_parity)
+            steps += [(value >> i) & 1 for i in range(32)]
+            steps += [parity, None, "skip"]
+        else:
+            self.write_bits = []
+            self.write_addr = addr
+            steps += [None, "skip"] + ["sample"] * 33
+        self.script = steps
+
+    def _finish_write(self):
+        bits = self.write_bits
+        if None in bits:
+            self.errors.append("host released SWDIO during write data")
+            return
+        value = sum(b << i for i, b in enumerate(bits[:32]))
+        if _parity(value) != bits[32]:
+            self.errors.append("bad write parity")
+        self.regs[self.write_addr] = value
+
+    def events(self, trace, swclk=0, swdio=1):
+        """Replay a trace. Returns the SWDIO pin events the target causes."""
+        pullup = 1 << swdio
+        result = [(0, pullup)]
+        level = 1
+        prev = 0
+        for row in trace:
+            clk = (row["pin_out"] >> swclk) & 1
+            if clk and not prev:
+                driven = (row["pin_oe"] >> swdio) & 1
+                self.rising((row["pin_out"] >> swdio) & 1 if driven else None)
+                now = 1 if self.drive is None else self.drive
+                if now != level:
+                    level = now
+                    result.append((row["cycle"] + 1, level << swdio))
+            prev = clk
+        return result
+
+
+def _swd_protocol(name, tx_bytes, cycles, rx_expect, irq_expect, **target_args):
+    """Build a _PROTOCOLS entry. The target's replies steer the chip's path,
+    so run the model and replay the target until the pin events settle. Each
+    pass is right up to one more decision: replies depend only on the past.
+    """
+    hex_path = _REPO_ROOT / "programs" / "swd.hex"
+    probe = _TRACE_DIR / f"{name}.probe.tsv"
+    events = [(0, 1 << 1)]
+    for _ in range(20):
+        _gen_golden(hex_path, probe, cycles, tx_bytes=tx_bytes, pin_events=events)
+        target = _SwdTarget(**target_args)
+        settled = target.events(_load_trace(probe))
+        if settled == events:
+            break
+        events = settled
+    else:
+        raise RuntimeError(f"{name}: SWD target replay did not settle")
+    if target.errors:
+        raise AssertionError(f"{name}: SWD target saw {target.errors}")
+    return (name, hex_path, cycles, tx_bytes, events, rx_expect, irq_expect)
+
+
+_SWD_LINE_RESET = 0x00
+_SWD_READ_ID = _swd_request(0, 1, 0x0)
+_SWD_WRITE_SEL = _swd_request(0, 0, 0x8)
+_SWD_READ_SEL = _swd_request(0, 1, 0x8)
+_SWD_WORD = 0xCAFE1235     # odd parity: a parity bit stuck at 0 must fail
+_SWD_OK, _SWD_WAIT = 0x20, 0x40
+_SWD_ID_BYTES = list(_SWD_IDCODE.to_bytes(4, "little"))
+_SWD_WORD_BYTES = list(_SWD_WORD.to_bytes(4, "little"))
+
 # Protocol configs:
 # (name, hex-file, cycles, tx-bytes, pin-events, rx-expect, irq-expect)
 _PROTOCOLS = [
@@ -747,6 +899,19 @@ if os.environ.get("GATES") != "yes" and _find_pemu_sim() is not None:
     _PROTOCOLS += [
         _jtag_protocol("jtag_idcode", _JTAG_IDCODE_BITS, _JTAG_IDCODE_RX),
         _jtag_protocol("jtag_bypass", _JTAG_BYPASS_BITS, _JTAG_BYPASS_RX),
+        # Read IDCODE, write a register, read it back through the target.
+        _swd_protocol("swd_rw",
+                      [_SWD_LINE_RESET, _SWD_READ_ID, _SWD_WRITE_SEL] +
+                      _SWD_WORD_BYTES + [_SWD_READ_SEL], 6000,
+                      [_SWD_OK] + _SWD_ID_BYTES + [_SWD_OK, _SWD_OK] + _SWD_WORD_BYTES,
+                      0b001),
+        # The target answers WAIT once; the host's retry succeeds.
+        _swd_protocol("swd_wait",
+                      [_SWD_LINE_RESET, _SWD_READ_ID, _SWD_READ_ID], 4500,
+                      [_SWD_WAIT, _SWD_OK] + _SWD_ID_BYTES, 0b101, waits=1),
+        # The target sends a wrong parity bit; the chip must flag it.
+        _swd_protocol("swd_parity", [_SWD_LINE_RESET, _SWD_READ_ID], 3500,
+                      [_SWD_OK] + _SWD_ID_BYTES, 0b011, bad_read_parity=True),
     ]
     _pre_generate_all_traces()
 

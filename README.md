@@ -25,8 +25,9 @@ JTAG, or slow-USB — just by loading a different program at boot.
 - **Cycle-accurate C++ model** (`model/`) — the golden reference the
   RTL is verified against.
 - **Assembler** (`asm/`) — turns `.pemu` mnemonics into 16-bit words.
-- **Six protocol programs** in `programs/`: `uart_tx.pemu`,
-  `uart_rx.pemu`, `spi.pemu`, `i2c_write.pemu`, `ps2.pemu`, `jtag.pemu`. Every one of them
+- **Seven protocol programs** in `programs/`: `uart_tx.pemu`,
+  `uart_rx.pemu`, `spi.pemu`, `i2c_write.pemu`, `ps2.pemu`, `jtag.pemu`,
+  `swd.pemu`. Every one of them
   cycle-matches the C++ model in `test/test.py`.
 
 ## Verification story
@@ -50,6 +51,9 @@ uart_rx     4400 cycles match
 ps2        32510 cycles match
 jtag_idcode 2780 cycles match
 jtag_bypass 1940 cycles match
+swd_rw      6000 cycles match
+swd_wait    4500 cycles match
+swd_parity  3500 cycles match
 ```
 
 ## Layout
@@ -61,7 +65,7 @@ jtag_bypass 1940 cycles match
 ├── docs/           ISA spec, architecture, TT datasheet source
 ├── model/          C++ cycle-accurate model of the ISA (pemu_sim)
 ├── asm/            C++ assembler for .pemu programs
-├── programs/       Verified protocol programs (uart_tx, uart_rx, spi, i2c_write, ps2, jtag)
+├── programs/       Verified protocol programs (uart_tx, uart_rx, spi, i2c_write, ps2, jtag, swd)
 ├── CMakeLists.txt  Top-level CMake for model/ + asm/
 ├── info.yaml       Tiny Tapeout project metadata / pinout
 ├── PLAN.md         Multi-phase roadmap

@@ -26,12 +26,13 @@ over a small SPI port on `ui[0..2]` / `uo[0]`, then sets the run bit,
 and the program starts from address 0. The same port feeds the TX FIFO,
 drains the RX FIFO, and reads the IRQ lines while the program runs.
 
-Six example protocols ship in `programs/`:
+Seven example protocols ship in `programs/`:
 `uart_tx.pemu`, `uart_rx.pemu` (both 8N1 @ 115200 baud),
 `spi.pemu` (mode 0 master, MSB-first, ~1 MHz on a 50 MHz core),
 `i2c_write.pemu` (single-byte master write with ACK sampling),
-`ps2.pemu` (device-to-host receiver with parity and stop checks), and
-`jtag.pemu` (host-driven TMS/TDI stream, ~1 MHz TCK). Each one
+`ps2.pemu` (device-to-host receiver with parity and stop checks),
+`jtag.pemu` (host-driven TMS/TDI stream, ~1 MHz TCK), and
+`swd.pemu` (Arm debug master with ACK, WAIT and parity handling). Each one
 is verified against a cycle-accurate C++ model: the cocotb testbench
 walks the RTL and the model side-by-side and asserts `(pc, regs,
 pin_out, pin_oe)` match on every clock edge.

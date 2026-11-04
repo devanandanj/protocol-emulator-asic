@@ -1,0 +1,158 @@
+; SWD master: one transaction per request byte, about 1.2 MHz SWCLK.
+;
+;   Pin 0 = SWCLK (output), pin 1 = SWDIO (bidirectional)
+;
+; The host sends a request byte to the TX FIFO, already holding its start,
+; APnDP, RnW, A[3:2], parity, stop and park bits. Sending 0x00 instead (a real
+; request always has start = 1) makes a line reset: 56 clocks with SWDIO high.
+;
+; Every request returns the ACK in the RX FIFO: 0x20 OK, 0x40 WAIT, 0x80 FAULT.
+;   Read OK:  four data bytes follow, LSB first. IRQ 0 when done. Bad data
+;             parity also raises IRQ 1.
+;   Write OK: pulls four data bytes, LSB first, and sends them with parity.
+;             IRQ 0 when done.
+;   Not OK:   IRQ 2 and no data phase. For a write, send the data bytes only
+;             after reading an OK ACK, or they would be taken as requests.
+;
+; SWDIO changes while SWCLK is low, and the target samples on the rising edge.
+; The target drives after a rising edge; the chip reads just before the next.
+;
+; Register use:
+;   r0 byte being shifted   r1 bytes left   r2 bits left (JCND: N+1 passes)
+;   r3 current bit (upper bits stay 0)      r4 ACK   r5 constants
+;   r6 copy of the request                  r7 data parity
+
+        set   0, 0
+        set   1, 1
+
+top:    pull  r0
+        ldi   r3, 1
+        and   r3, r0
+        ldi   r5, 1
+        skeq  r3, r5            ; start bit set: a real request
+        jmp   linereset
+        ldi   r6, 0
+        or    r6, r0
+
+        ldi   r2, 7             ; 8 request bits
+req:    out   1, r0
+        shift r0, right, 1
+        delay 8
+        set   0, 1
+        delay 9
+        set   0, 0
+        jcnd  r2, req
+
+        in    1, r3             ; turnaround: release SWDIO
+        delay 9
+        set   0, 1
+        delay 9
+        set   0, 0
+
+        ldi   r4, 0             ; 3 ACK bits
+        ldi   r2, 2
+ack:    delay 6
+        in    1, r3
+        or    r4, r3
+        rot   r4, right, 1
+        set   0, 1
+        delay 9
+        set   0, 0
+        jcnd  r2, ack
+
+        push  r4
+        ldi   r5, 0x20
+        skeq  r4, r5
+        jmp   notok
+        ldi   r5, 4             ; RnW bit of the request
+        and   r6, r5
+        skeq  r6, r5
+        jmp   write
+
+        ldi   r7, 0             ; read: 4 bytes, parity, turnaround
+        ldi   r1, 3
+rbyte:  ldi   r0, 0
+        ldi   r2, 7
+rbit:   delay 5
+        in    1, r3
+        xor   r7, r3
+        or    r0, r3            ; r0 bit 0 is free until the 8th rotate
+        rot   r0, right, 1
+        set   0, 1
+        delay 9
+        set   0, 0
+        jcnd  r2, rbit
+        push  r0
+        jcnd  r1, rbyte
+
+        delay 8
+        in    1, r3
+        xor   r7, r3            ; even parity: all 33 bits XOR to 0
+        set   0, 1
+        delay 9
+        set   0, 0
+
+        delay 9
+        set   0, 1
+        delay 9
+        set   0, 0
+
+        ldi   r5, 0
+        skeq  r7, r5
+        irq   1
+        jmp   done
+
+write:  delay 9                 ; turnaround back to the host
+        set   0, 1
+        delay 9
+        set   0, 0
+        ldi   r7, 0
+        ldi   r1, 3
+wbyte:  pull  r0
+        ldi   r2, 7
+wbit:   ldi   r3, 1
+        and   r3, r0
+        xor   r7, r3
+        out   1, r0
+        shift r0, right, 1
+        delay 4
+        set   0, 1
+        delay 9
+        set   0, 0
+        jcnd  r2, wbit
+        jcnd  r1, wbyte
+
+        out   1, r7             ; parity bit
+        delay 8
+        set   0, 1
+        delay 9
+        set   0, 0
+
+done:   irq   0
+        jmp   idle
+
+notok:  delay 9                 ; turnaround back to the host
+        set   0, 1
+        delay 9
+        set   0, 0
+        irq   2
+
+idle:   set   1, 0              ; 8 idle clocks
+        ldi   r2, 7
+clocks: delay 8
+        set   0, 1
+        delay 9
+        set   0, 0
+        jcnd  r2, clocks
+        set   1, 1
+        jmp   top
+
+linereset:
+        set   1, 1
+        ldi   r2, 55
+reset:  delay 8
+        set   0, 1
+        delay 9
+        set   0, 0
+        jcnd  r2, reset
+        jmp   idle
