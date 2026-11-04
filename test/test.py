@@ -377,6 +377,96 @@ async def test_host_port(dut):
 
 
 # ============================================================================
+# Lock-cracker demo. The chip runs lockprobe.hex: it forwards a guess to a
+# target lock and times, to the cycle, how long the target takes to answer.
+# The target bails at the first wrong byte, so a correct byte makes the answer
+# arrive later. The host search below recovers the secret one byte at a time
+# from that timing alone -- a side channel only the chip's cycle-exact stopwatch
+# can see. GCLK = pin 0, GDAT = pin 1, DONE = pin 2.
+
+_LOCK_GCLK, _LOCK_GDAT, _LOCK_DONE = 0, 1, 2
+
+
+async def _lock_target(dut, secret, base, step):
+    """Far-end lock. Reads guesses off the chip's pins and answers after a
+    delay that grows with the number of correct leading bytes."""
+    L = len(secret)
+    prev_gclk = 0
+    while True:
+        # Collect one guess: L bytes, 8 bits each, LSB first, sampled on GCLK.
+        got, cur, nbits = [], 0, 0
+        while len(got) < L:
+            await RisingEdge(dut.clk)
+            await ReadOnly()
+            out = int(dut.uio_out.value)
+            gclk = (out >> _LOCK_GCLK) & 1
+            if gclk and not prev_gclk:
+                cur = (cur >> 1) | (((out >> _LOCK_GDAT) & 1) << 7)
+                nbits += 1
+                if nbits == 8:
+                    got.append(cur)
+                    cur, nbits = 0, 0
+            prev_gclk = gclk
+
+        correct = 0
+        for g, s in zip(got, secret):
+            if g != s:
+                break
+            correct += 1
+
+        await ClockCycles(dut.clk, base + step * correct)
+        await NextTimeStep()
+        dut.uio_in.value = 1 << _LOCK_DONE          # DONE high
+        await ClockCycles(dut.clk, 8)               # hold long enough to sample
+        await NextTimeStep()
+        dut.uio_in.value = 0                        # drop before the next guess
+        prev_gclk = 0
+
+
+async def _probe_once(dut, guess):
+    """Send one guess, wait for the chip's two timing bytes, return elapsed."""
+    await spi_xfer(dut, [CMD_TX, len(guess)] + list(guess))
+    for _ in range(4000):                           # bounded wait for the answer
+        if ((await read_status(dut)) & STATUS_RX_COUNT) >= 2:
+            break
+        await ClockCycles(dut.clk, 20)
+    _, t0, t1 = await spi_xfer(dut, [CMD_RX, 0, 0])
+    return (t1 - t0) & 0xFF
+
+
+@cocotb.test(skip=os.environ.get("GATES") == "yes")
+async def test_lockcrack(dut):
+    """The chip's timing leak lets the host recover an unknown secret."""
+    await NextTimeStep()
+    ensure_clock(dut)
+    await _do_reset(dut)
+
+    secret = [0x53, 0x45, 0x43]                     # "SEC"
+    alphabet = [0x00, 0x43, 0x45, 0x53]             # candidates tried per byte
+    base, step = 10, 6
+
+    await load_program(dut, _load_hex(_REPO_ROOT / "programs" / "lockprobe.hex"))
+    cocotb.start_soon(_lock_target(dut, secret, base, step))
+    await start_core(dut)
+    await NextTimeStep()                            # leave the ReadOnly phase
+
+    recovered = []
+    for pos in range(len(secret)):
+        best_c, best_t = None, -1
+        for c in alphabet:
+            guess = recovered + [c] + [0] * (len(secret) - pos - 1)
+            t = await _probe_once(dut, guess)
+            if t > best_t:
+                best_t, best_c = t, c
+        recovered.append(best_c)
+        dut._log.info(f"lockcrack: recovered {bytes(recovered)!r} "
+                      f"(byte {pos} = 0x{best_c:02x}, {best_t} cycles)")
+
+    assert recovered == secret, f"recovered {recovered}, secret {secret}"
+    dut._log.info(f"lockcrack: cracked the lock -> {bytes(recovered)!r}")
+
+
+# ============================================================================
 # Phase 3 — per-protocol RTL vs C++ golden-trace verification.
 # ============================================================================
 

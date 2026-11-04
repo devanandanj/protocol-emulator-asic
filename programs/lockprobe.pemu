@@ -1,0 +1,31 @@
+; lockprobe — the cycle-exact timing probe for the lock-cracker demo.
+;
+; The chip forwards a guess to a target lock and measures, to the cycle, how
+; long the target takes to answer. The host sends a guess as TX bytes
+;   [N, b0, b1, ... b(N-1)]
+; and reads back two RX bytes [t0, t1]; the elapsed time is (t1 - t0) & 0xFF.
+; A target that bails at the first wrong byte answers sooner, so a correct
+; byte makes the elapsed count jump. The host runs the search; the chip only
+; needs to be the precise stopwatch no PC-side timer can match.
+;
+; Pins: GCLK = 0 (out), GDAT = 1 (out), DONE = 2 (in, target-driven).
+
+start:  pull r0                ; r0 = N, number of guess bytes
+top:    jcnd r0, body          ; r0 != 0 -> r0--, send another byte
+        jmp  measure           ; all bytes sent
+body:   pull r1                ; r1 = next guess byte
+        ldi  r4, 8             ; 8 bits, LSB first
+sbit:   jcnd r4, sb            ; r4 != 0 -> r4--, send another bit
+        jmp  top               ; byte done
+sb:     out  1, r1             ; GDAT = r1 bit 0
+        set  0, 1              ; GCLK high
+        set  0, 0              ; GCLK low (target samples on this edge)
+        rot  r1, 1, 1          ; rotate right: next bit into bit 0
+        jmp  sbit
+
+measure:cycl r2                ; t0 = counter before the wait
+        wait 2, 1, 0           ; stall until DONE == 1 (no timeout)
+        cycl r3                ; t1 = counter after DONE
+        push r2
+        push r3
+        jmp  start             ; ready for the next guess
