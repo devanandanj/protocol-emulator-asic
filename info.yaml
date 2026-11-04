@@ -46,8 +46,8 @@ pinout:
   uio[2]: "pin 2 (spi MISO)"
   uio[3]: "pin 3 (uart_rx RX, i2c SDA)"
   uio[4]: "pin 4 (i2c SCL)"
-  uio[5]: "pin 5"
-  uio[6]: "pin 6"
+  uio[5]: "pin 5 (ps2 CLK)"
+  uio[6]: "pin 6 (ps2 DATA)"
   uio[7]: "pin 7"
 
 # Do not change!

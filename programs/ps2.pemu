@@ -1,0 +1,46 @@
+; PS/2 receiver: device-to-host frames, clocked by the device.
+;
+;   Pin 5 = CLK, pin 6 = DATA (inputs; the device drives both)
+;
+; Frame: start (0), 8 data bits LSB first, odd parity, stop (1). Data is
+; valid on the falling CLK edge. Good bytes go to the RX FIFO with IRQ 0;
+; a parity or stop error drops the byte and raises IRQ 1.
+;
+; Register use:
+;   r0 byte being assembled   r1 bits left (JCND runs body N+1 times)
+;   r2 running parity         r3 sampled bit (upper bits stay 0)
+;   r4 constant 1
+
+        ldi   r4, 1
+frame:  ldi   r0, 0
+        ldi   r1, 7
+        ldi   r2, 0
+        wait  5, 0, 0           ; start bit: first falling CLK edge
+        wait  5, 1, 0
+bit:    wait  5, 0, 0
+        in    6, r3
+        xor   r2, r3
+        or    r0, r3            ; r0 bit 0 is free until the 8th rotate
+        rot   r0, right, 1
+        wait  5, 1, 0
+        jcnd  r1, bit
+
+        wait  5, 0, 0           ; parity bit
+        in    6, r3
+        xor   r2, r3            ; odd parity: all nine bits XOR to 1
+        wait  5, 1, 0
+
+        wait  5, 0, 0           ; stop bit
+        in    6, r3
+        wait  5, 1, 0
+
+        skeq  r2, r4
+        jmp   bad
+        skeq  r3, r4
+        jmp   bad
+        push  r0
+        irq   0
+        jmp   frame
+
+bad:    irq   1
+        jmp   frame

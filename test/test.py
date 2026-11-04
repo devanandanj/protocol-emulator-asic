@@ -465,7 +465,8 @@ async def _do_reset(dut, initial_pin_mask=0):
 
 
 async def _run_protocol(dut, name, hex_path, cycles,
-                        tx_bytes=None, pin_events=None, rx_expect=None):
+                        tx_bytes=None, pin_events=None, rx_expect=None,
+                        irq_expect=None):
     """Diff RTL against pemu_sim's golden trace cycle-for-cycle."""
     dut._log.info(f"=== protocol: {name} ({cycles} cycles) ===")
 
@@ -525,6 +526,10 @@ async def _run_protocol(dut, name, hex_path, cycles,
         assert int(dut.uo_out.value) & 0b10
         replies = await spi_xfer(dut, [CMD_RX] + [0] * len(rx_expect))
         assert replies[1:] == rx_expect, f"{name}: host read {replies[1:]}"
+    if irq_expect is not None:
+        await NextTimeStep()
+        _, lo, hi = await spi_xfer(dut, [CMD_IRQ, 0, 0])
+        assert lo | hi << 8 == irq_expect, f"{name}: irq {lo | hi << 8:#x}"
 
     dut._log.info(f"{name}: {cycles} cycles match")
 
@@ -543,13 +548,51 @@ def _uart_rx_events(byte, start_cycle=10, bit_period=434, rx_pin=3):
     events.append((start_cycle + bit_period * 9, idle))
     return events
 
-# Protocol configs: (name, hex-file, cycles, tx-bytes, pin-events, rx-expect)
+def _ps2_events(frames, half=250, clk_pin=5, data_pin=6):
+    """Far-end PS/2 device. Returns (pin events, end cycle).
+
+    frames is a list of (byte, parity_ok, stop_ok). DATA changes while CLK is
+    high and CLK falls mid-bit. half is the CLK half period in core cycles,
+    far below a real device's ~2000: the program is paced by CLK, so a faster
+    clock exercises the same logic in a shorter simulation.
+    """
+    clk, data = 1 << clk_pin, 1 << data_pin
+    idle = clk | data
+    events = [(0, idle)]
+    t = 10
+    for byte, parity_ok, stop_ok in frames:
+        parity = (bin(byte).count("1") + 1) & 1
+        if not parity_ok:
+            parity ^= 1
+        bits = [0] + [(byte >> i) & 1 for i in range(8)] + [parity, int(stop_ok)]
+        for bit in bits:
+            level = data if bit else 0
+            events.append((t, clk | level))
+            events.append((t + half // 2, level))
+            events.append((t + half // 2 + half, clk | level))
+            t += 2 * half
+        events.append((t, idle))
+        t += 4 * half
+    return events, t
+
+
+_PS2_EVENTS, _PS2_CYCLES = _ps2_events([
+    (0xA5, True, True),
+    (0x3C, False, True),    # bad parity: dropped, IRQ 1
+    (0x00, True, True),
+    (0xFF, True, False),    # bad stop bit: dropped, IRQ 1
+    (0x5A, True, True),
+])
+
+# Protocol configs:
+# (name, hex-file, cycles, tx-bytes, pin-events, rx-expect, irq-expect)
 _PROTOCOLS = [
-    ("uart_tx",   _REPO_ROOT / "programs" / "uart_tx.hex",    500, [0x55], None, None),
-    ("spi",       _REPO_ROOT / "programs" / "spi.hex",        400, [0xA5], None, None),
-    ("i2c_write", _REPO_ROOT / "programs" / "i2c_write.hex", 1000, [0xA0], [(0, 0x18)], None),
-    ("ext_test",  _REPO_ROOT / "programs" / "ext_test.hex",     80, None,   [(2, 0x08), (8, 0), (27, 0x08), (44, 0), (56, 0x08), (70, 0)], None),
-    ("uart_rx",   _REPO_ROOT / "programs" / "uart_rx.hex",   4400, None,   _uart_rx_events(0x55), [0x55]),
+    ("uart_tx",   _REPO_ROOT / "programs" / "uart_tx.hex",    500, [0x55], None, None, None),
+    ("spi",       _REPO_ROOT / "programs" / "spi.hex",        400, [0xA5], None, None, None),
+    ("i2c_write", _REPO_ROOT / "programs" / "i2c_write.hex", 1000, [0xA0], [(0, 0x18)], None, None),
+    ("ext_test",  _REPO_ROOT / "programs" / "ext_test.hex",     80, None,   [(2, 0x08), (8, 0), (27, 0x08), (44, 0), (56, 0x08), (70, 0)], None, None),
+    ("uart_rx",   _REPO_ROOT / "programs" / "uart_rx.hex",   4400, None,   _uart_rx_events(0x55), [0x55], None),
+    ("ps2",       _REPO_ROOT / "programs" / "ps2.hex", _PS2_CYCLES, None, _PS2_EVENTS, [0xA5, 0x00, 0x5A], 0b11),
 ]
 
 
@@ -564,7 +607,7 @@ def _pre_generate_all_traces():
     if binary is None:
         return                       # Test will surface a helpful error later.
     _TRACE_DIR.mkdir(exist_ok=True)
-    for name, hex_path, cycles, tx_bytes, pin_events, _ in _PROTOCOLS:
+    for name, hex_path, cycles, tx_bytes, pin_events, _, _ in _PROTOCOLS:
         trace_path = _TRACE_DIR / f"{name}.trace.tsv"
         cmd = [str(binary), str(hex_path), str(trace_path), str(cycles)]
         if tx_bytes:
@@ -590,6 +633,7 @@ async def test_protocols(dut):
     # Prior test ends in the ReadOnly phase; leave it before touching signals.
     await NextTimeStep()
     ensure_clock(dut)
-    for name, hex_path, cycles, tx_bytes, pin_events, rx_expect in _PROTOCOLS:
+    for name, hex_path, cycles, tx_bytes, pin_events, rx_expect, irq_expect in _PROTOCOLS:
         await _run_protocol(dut, name, hex_path, cycles, tx_bytes=tx_bytes,
-                            pin_events=pin_events, rx_expect=rx_expect)
+                            pin_events=pin_events, rx_expect=rx_expect,
+                            irq_expect=irq_expect)
