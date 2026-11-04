@@ -38,7 +38,7 @@ host port. Its two main tests are:
 1. `test_step3` — a hand-written ISA walk that exercises every opcode
    at least once (34 clocks, direct assertions on `pc`, regs, and
    pins).
-2. `test_protocols` — for each of the four protocols, run
+2. `test_protocols` — for each protocol program, run
    `pemu_sim` (the C++ model) with the same TX / pin-event stimulus,
    dump a per-cycle trace, then diff `(pc, regs, uio_out, uio_oe)`
    against the RTL cycle-for-cycle. Any drift fails the test.
@@ -55,6 +55,9 @@ swd_rw      6000 cycles match
 swd_wait    4500 cycles match
 swd_parity  3500 cycles match
 ```
+
+The full method, and what isn't covered yet, is in
+[docs/verification.md](docs/verification.md).
 
 ## Layout
 
