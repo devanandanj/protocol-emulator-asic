@@ -597,6 +597,50 @@ void out_od_invalid_register_throws() {
 }
 
 
+void ext_alu_ops() {
+    // LDI r0,0x5A; LDI r1,0x0F; XOR r0,r1; AND r0,r1; OR r0,r1; ADD r0,r1
+    pemu::Core c({0xC05A, 0xC10F, 0xF001, 0xF101, 0xF201, 0xF301});
+    c.step(); c.step();
+    c.step(); assert(c.regs()[0] == 0x55);
+    c.step(); assert(c.regs()[0] == 0x05);
+    c.step(); assert(c.regs()[0] == 0x0F);
+    c.step(); assert(c.regs()[0] == 0x1E);
+    assert(c.pc() == 6);
+
+    // ADD wraps at 8 bits: 0xFF + 2 = 1
+    pemu::Core w({0xC0FF, 0xC102, 0xF301});
+    w.step(); w.step(); w.step();
+    assert(w.regs()[0] == 0x01);
+}
+
+void ext_skeq_skips_only_when_equal() {
+    // LDI r0,1; SKEQ r0,r1 (1 != 0, no skip); SKEQ r1,r2 (0 == 0, skip)
+    pemu::Core c({0xC001, 0xF401, 0xF412, 0x0000, 0x0000});
+    c.step();
+    const auto cycles = c.cycles();
+    c.step(); assert(c.pc() == 2);
+    c.step(); assert(c.pc() == 4);
+    assert(c.cycles() == cycles + 2);   // one cycle each, taken or not
+}
+
+void ext_skp_sees_pin_two_cycles_late() {
+    // SKP pin 3, val 1 at each address, so pc shows when the skip first fires.
+    pemu::Core c({0xF531, 0xF531, 0xF531, 0xF531, 0x0000, 0x0000});
+    c.step();                       // cycle 1: pin low, no skip
+    assert(c.pc() == 1);
+    c.set_pin_in(0x8);              // rises before cycle 2
+    c.step(); assert(c.pc() == 2);  // cycle 2: synchronizer still low
+    c.step(); assert(c.pc() == 3);  // cycle 3: still low
+    c.step(); assert(c.pc() == 5);  // cycle 4: high, skip
+}
+
+void ext_unknown_subop_throws() {
+    pemu::Core c({0xF600});
+    bool threw = false;
+    try { c.step(); } catch (const std::runtime_error&) { threw = true; }
+    assert(threw);
+}
+
 } // namespace
 
 int main() {
@@ -667,6 +711,12 @@ int main() {
     out_od_bit_zero_drives_line_low_and_asserts_oe();
     out_od_bit_one_releases_oe();
     out_od_invalid_register_throws();
+
+    // EXT
+    ext_alu_ops();
+    ext_skeq_skips_only_when_equal();
+    ext_skp_sees_pin_two_cycles_late();
+    ext_unknown_subop_throws();
 
     std::cout << "pemu_model_tests: all tests passed\n";
     return 0;

@@ -1,0 +1,27 @@
+; Exercises the 0xF extended group. Not a protocol: test_protocols runs it to
+; compare the RTL with the model cycle-for-cycle, including SKP's two-cycle
+; synchronizer delay on pin 3.
+
+        ldi   r0, 0x5A
+        ldi   r1, 0x0F
+        xor   r0, r1            ; 0x55
+        and   r0, r1            ; 0x05
+        or    r0, r1            ; 0x0F
+        add   r0, r1            ; 0x1E
+        ldi   r2, 0xFF
+        ldi   r3, 2
+        add   r2, r3            ; wraps to 1
+        skeq  r0, r1            ; not equal: no skip
+        ldi   r4, 1
+        skeq  r1, r1            ; equal: skip
+        ldi   r4, 2
+wait_hi:
+        skp   3, 1              ; leave the loop once pin 3 is high
+        jmp   wait_hi
+        ldi   r5, 0x0A
+wait_lo:
+        skp   3, 0              ; leave the loop once pin 3 is low
+        jmp   wait_lo
+        ldi   r6, 0x0B
+done:
+        jmp   done

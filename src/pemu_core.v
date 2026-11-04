@@ -39,6 +39,15 @@ module pemu_core (
   localparam [3:0] OP_LDI    = 4'hC;
   localparam [3:0] OP_ROT    = 4'hD;
   localparam [3:0] OP_OUT_OD = 4'hE;
+  localparam [3:0] OP_EXT    = 4'hF;
+
+  // Sub-ops of OP_EXT, in operand[11:8].
+  localparam [3:0] EXT_XOR   = 4'h0;
+  localparam [3:0] EXT_AND   = 4'h1;
+  localparam [3:0] EXT_OR    = 4'h2;
+  localparam [3:0] EXT_ADD   = 4'h3;
+  localparam [3:0] EXT_SKEQ  = 4'h4;
+  localparam [3:0] EXT_SKP   = 4'h5;
 
   // Program memory — 256 words × 16 bits in IHP's single-port SRAM macro.
   // Written through the host port while the core is halted. No initial
@@ -116,6 +125,18 @@ reg [2:0]  pull_reg;          // which register PULL should load into
 wire[15:0] instr    = sram_dout;
 wire[3:0]  op       = instr[15:12];
 wire[11:0] operand  = instr[11:0];
+wire[3:0]  ext_op   = operand[11:8];
+wire[7:0]  ext_a    = regs[operand[6:4]];
+wire[7:0]  ext_b    = regs[operand[2:0]];
+
+// SKP feeds pc_next and so the SRAM address: a raw pin changing at the clock
+// edge could resolve differently per address bit and fetch a wild address.
+reg [7:0] pin_s1;
+reg [7:0] pin_s2;
+always @(posedge clk) begin
+    pin_s1 <= pin_in;
+    pin_s2 <= pin_s1;
+end
 
 // Any cycle in which no instruction issues and pc holds.
 wire stalled = waiting_for_pin || (stall_remaining > 12'd0) || waiting_for_pull;
@@ -186,8 +207,8 @@ always @(posedge clk) begin
 end
 
 // Next-PC logic, combinational so it can address the SRAM a cycle ahead.
-// The only branching opcodes are JMP and JCND; every other implemented
-// opcode falls through to pc+1. The unimplemented opcode 0xF freezes pc.
+// JMP, JCND and the EXT skips branch; every other opcode falls through to
+// pc+1. Unknown EXT sub-ops freeze pc.
 // pc stays 12 bits (the ISA's JMP field), but only pc[7:0] reaches the
 // 256-word SRAM, so addresses alias modulo 256.
 reg [11:0] pc_next_r;
@@ -203,7 +224,16 @@ always @(*) begin
             OP_JMP:  pc_next_r = operand;
             OP_JCND: pc_next_r = (regs[operand[10:8]] != 8'd0)
                                  ? {4'd0, operand[7:0]} : pc + 12'd1;
-            4'hF:    pc_next_r = pc;
+            OP_EXT: begin
+                case (ext_op)
+                    EXT_XOR, EXT_AND, EXT_OR, EXT_ADD:
+                             pc_next_r = pc + 12'd1;
+                    EXT_SKEQ: pc_next_r = pc + ((ext_a == ext_b) ? 12'd2 : 12'd1);
+                    EXT_SKP:  pc_next_r = pc + ((pin_s2[operand[6:4]] == operand[0])
+                                                ? 12'd2 : 12'd1);
+                    default: pc_next_r = pc;
+                endcase
+            end
             default: pc_next_r = pc + 12'd1;
         endcase
     end
@@ -355,8 +385,16 @@ always @(posedge clk) begin
                     pin_oe [operand[10:8]] <= 1'b0;
                 end
             end
-            default: begin
-                // Not yet implemented — pc_next freezes PC.
+            OP_EXT: begin
+                // operand: sub-op[11:8], a[6:4], b[2:0]. Skips only move pc.
+                case (ext_op)
+                    EXT_XOR: regs[operand[6:4]] <= ext_a ^ ext_b;
+                    EXT_AND: regs[operand[6:4]] <= ext_a & ext_b;
+                    EXT_OR:  regs[operand[6:4]] <= ext_a | ext_b;
+                    EXT_ADD: regs[operand[6:4]] <= ext_a + ext_b;
+                    default: begin
+                    end
+                endcase
             end
         endcase
     end

@@ -326,6 +326,23 @@ u16 encode_out_od(const std::vector<std::string>& ops) {
     return static_cast<u16>((u16{0xE} << 12) | (pin << 8) | (reg << 4));
 }
 
+// Register-register group of the 0xF extended opcode.
+u16 encode_ext_rr(u32 sub, const std::vector<std::string>& ops, const char* mnemonic) {
+    require_operand_count(ops, 2, mnemonic, "reg, reg");
+    const u32 a = parse_register(ops[0]);
+    const u32 b = parse_register(ops[1]);
+    return static_cast<u16>((u16{0xF} << 12) | (sub << 8) | (a << 4) | b);
+}
+
+u16 encode_skp(const std::vector<std::string>& ops) {
+    require_operand_count(ops, 2, "SKP", "pin, val");
+    const u32 pin = parse_number(ops[0]);
+    const u32 val = parse_number(ops[1]);
+    require_range(pin, 7, "SKP pin");
+    require_range(val, 1, "SKP val");
+    return static_cast<u16>((u16{0xF} << 12) | (u16{0x5} << 8) | (pin << 4) | val);
+}
+
 }  // namespace
 
 // -----------------------------------------------------------------
@@ -387,6 +404,12 @@ AssembleResult assemble(std::istream& in) {
             else if (m == "ldi")   word = encode_ldi  (line.operands);
             else if (m == "rot")   word = encode_rot  (line.operands);
             else if (m == "out_od") word = encode_out_od(line.operands);
+            else if (m == "xor")   word = encode_ext_rr(0x0, line.operands, "XOR");
+            else if (m == "and")   word = encode_ext_rr(0x1, line.operands, "AND");
+            else if (m == "or")    word = encode_ext_rr(0x2, line.operands, "OR");
+            else if (m == "add")   word = encode_ext_rr(0x3, line.operands, "ADD");
+            else if (m == "skeq")  word = encode_ext_rr(0x4, line.operands, "SKEQ");
+            else if (m == "skp")   word = encode_skp(line.operands);
             else throw std::runtime_error("unknown mnemonic '" + m + "'");
             r.words.push_back(word);
         } catch (const std::exception& e) {

@@ -15,7 +15,7 @@ JTAG, or slow-USB — just by loading a different program at boot.
 
 ## What's shipped
 
-- **15-opcode ISA** (see [docs/isa.md](docs/isa.md)) with a 12-bit PC,
+- **16-opcode ISA** (see [docs/isa.md](docs/isa.md)) with a 12-bit PC,
   eight 8-bit general-purpose registers, and two 16-deep FIFOs on the
   host seam.
 - **Verilog RTL** — `src/pemu_core.v` (the core), `src/pemu_host.v` (the

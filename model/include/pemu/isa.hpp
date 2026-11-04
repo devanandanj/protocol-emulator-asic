@@ -39,6 +39,17 @@ enum class Op : std::uint8_t {
     Ldi   = 0xC,   // load immediate into register
     Rot   = 0xD,   // Rotate Shift Register
     OutOd = 0xE,   // open-drain drive from register (I2C SDA/SCL)
+    Ext   = 0xF,   // extended group, sub-op in bits [11:8]
+};
+
+// Sub-ops of Op::Ext. Operands: a = bits [6:4], b = bits [2:0].
+enum class ExtOp : std::uint8_t {
+    Xor  = 0x0,   // regs[a] ^= regs[b]
+    And  = 0x1,   // regs[a] &= regs[b]
+    Or   = 0x2,   // regs[a] |= regs[b]
+    Add  = 0x3,   // regs[a] += regs[b], wrapping at 8 bits
+    Skeq = 0x4,   // skip next instruction if regs[a] == regs[b]
+    Skp  = 0x5,   // skip next if synchronized pin a == bit 0 of the word
 };
 
 inline constexpr std::size_t kNumRegs      = 8;
@@ -83,7 +94,11 @@ public:
     std::optional<std::uint8_t> pop_rx();
 
     // For directly injecting input-pin state from tests.
-    void set_pin_in(std::uint32_t bits) noexcept { pin_in_ = bits & 0x00FFFFFFu; }
+    void set_pin_in(std::uint32_t bits) noexcept {
+        pin_in_ = bits & 0x00FFFFFFu;
+        // Before cycle 1 the chip is halted, so its synchronizer has settled.
+        if (cycles_ == 0) pin_s1_ = pin_s2_ = pin_in_;
+    }
     void set_reg(std::size_t idx, std::uint8_t val);
 
     [[nodiscard]] TraceRecord snapshot() const noexcept;
@@ -105,6 +120,8 @@ private:
     std::deque<std::uint8_t>              tx_fifo_;   // host -> core
     std::deque<std::uint8_t>              rx_fifo_;   // core -> host
     std::uint32_t                         pin_in_{};
+    std::uint32_t                         pin_s1_{};  // 2-flop synchronizer, as in the RTL
+    std::uint32_t                         pin_s2_{};
     std::uint32_t                         pin_out_{};
     std::uint32_t                         pin_oe_{};
     std::uint64_t                         cycles_{};

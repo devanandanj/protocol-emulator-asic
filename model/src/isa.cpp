@@ -28,6 +28,8 @@ void Core::reset() noexcept {
     tx_fifo_.clear();
     rx_fifo_.clear();
     pin_in_  = 0;
+    pin_s1_  = 0;
+    pin_s2_  = 0;
     pin_out_ = 0;
     pin_oe_  = 0;
     cycles_  = 0;
@@ -42,6 +44,11 @@ void Core::reset() noexcept {
 }
 
 void Core::step() {
+    // Runs every cycle, including stalls: the synchronizer is free-running.
+    const u32 pin_synced = pin_s2_;
+    pin_s2_ = pin_s1_;
+    pin_s1_ = pin_in_;
+
     if (waiting_for_pin_) {
         const u32 curr = (pin_in_ >> wait_pin_) & 0x1u;
         if (curr == static_cast<u32>(wait_val_)) {
@@ -248,6 +255,29 @@ void Core::step() {
                 pin_oe_  &= ~mask;   // release (external pullup brings line high)
             }
             ++pc_;
+            break;
+        }
+
+        case Op::Ext: {
+            const u32 a = (ins.operand >> 4) & 0x7u;
+            const u32 b =  ins.operand       & 0x7u;
+            switch (static_cast<ExtOp>((ins.operand >> 8) & 0xFu)) {
+                case ExtOp::Xor: regs_[a] ^= regs_[b]; ++pc_; break;
+                case ExtOp::And: regs_[a] &= regs_[b]; ++pc_; break;
+                case ExtOp::Or:  regs_[a] |= regs_[b]; ++pc_; break;
+                case ExtOp::Add:
+                    regs_[a] = static_cast<u8>(regs_[a] + regs_[b]);
+                    ++pc_;
+                    break;
+                case ExtOp::Skeq:
+                    pc_ = static_cast<u16>(pc_ + (regs_[a] == regs_[b] ? 2u : 1u));
+                    break;
+                case ExtOp::Skp:
+                    pc_ = static_cast<u16>(pc_ + (((pin_synced >> a) & 0x1u) == (b & 0x1u) ? 2u : 1u));
+                    break;
+                default:
+                    throw std::runtime_error("PEmu: unknown extended sub-op");
+            }
             break;
         }
 

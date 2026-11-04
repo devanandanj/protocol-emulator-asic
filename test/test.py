@@ -548,6 +548,7 @@ _PROTOCOLS = [
     ("uart_tx",   _REPO_ROOT / "programs" / "uart_tx.hex",    500, [0x55], None, None),
     ("spi",       _REPO_ROOT / "programs" / "spi.hex",        400, [0xA5], None, None),
     ("i2c_write", _REPO_ROOT / "programs" / "i2c_write.hex", 1000, [0xA0], [(0, 0x18)], None),
+    ("ext_test",  _REPO_ROOT / "programs" / "ext_test.hex",     60, None,   [(23, 0x08), (40, 0)], None),
     ("uart_rx",   _REPO_ROOT / "programs" / "uart_rx.hex",   4400, None,   _uart_rx_events(0x55), [0x55]),
 ]
 

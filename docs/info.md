@@ -13,7 +13,7 @@ chip is one datapath plus a 256-word SRAM program memory: the *firmware* picks
 the protocol at boot. Reloading a different program turns the same
 silicon into a UART, an SPI master, or an I²C master.
 
-The core is a single-issue in-order machine with a 15-opcode ISA
+The core is a single-issue in-order machine with a 16-opcode ISA
 (`docs/isa.md`), a 12-bit program counter, eight 8-bit general-purpose
 registers, and two 16-deep 8-bit FIFOs on the host seam (one for host →
 core, one for core → host). Every instruction is 16 bits and executes

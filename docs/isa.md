@@ -1,8 +1,8 @@
 # PEmu ISA
 
-Status: **frozen for v1**. The 15-opcode set below is what the RTL,
-the C++ model, and all four shipped protocol programs (`uart_tx`,
-`uart_rx`, `spi`, `i2c_write`) run against. The verification harness
+Status: **v2**. The 16-opcode set below is what the RTL, the C++ model,
+and the shipped programs (`uart_tx`, `uart_rx`, `spi`, `i2c_write`,
+`ext_test`) run against. The verification harness
 diffs RTL and model cycle-for-cycle on every one of them.
 
 ## Design goals
@@ -53,6 +53,31 @@ they explicitly wait.
 | `LDI r,imm`  | 0xC      | reg[11:8], imm[7:0]                  | `regs[r] = imm`. Load 8-bit immediate into register.   |
 | `ROT r,d,c`  | 0xD      | reg[11:8], dir[7], count[3:0]        | Rotate `regs[r]` by `c mod 8` positions. dir=0 left, dir=1 right. |
 | `OUT_OD p,r` | 0xE      | pin[11:8], reg[7:4]                  | Open-drain drive: bit0=0 drives `pin` low (OE=1), bit0=1 releases (OE=0). |
+| Extended     | 0xF      | sub[11:8], a[6:4], b[2:0]            | See the extended group below.                          |
+
+### Extended group (0xF)
+
+The last free opcode is a group, so new operations don't need new
+opcodes. Each takes 1 cycle, whether or not a skip is taken, so bit
+loops stay cycle-exact.
+
+| Mnemonic     | Sub | Effect                                                     |
+|--------------|:---:|------------------------------------------------------------|
+| `XOR ra,rb`  | 0x0 | `regs[a] ^= regs[b]`                                       |
+| `AND ra,rb`  | 0x1 | `regs[a] &= regs[b]`                                       |
+| `OR ra,rb`   | 0x2 | `regs[a] \|= regs[b]`                                      |
+| `ADD ra,rb`  | 0x3 | `regs[a] += regs[b]`, wrapping at 8 bits                   |
+| `SKEQ ra,rb` | 0x4 | Skip the next instruction if `regs[a] == regs[b]`          |
+| `SKP p,v`    | 0x5 | Skip the next instruction if synchronized pin `p` equals `v` (`a` = pin 0–7, `b` bit 0 = value) |
+
+Sub-ops 0x6–0xF are reserved. The RTL freezes `pc` on them; the model
+throws.
+
+`SKP` reads the pin through a two-flop synchronizer, so it sees the
+pin as it was two cycles earlier (`IN` and `WAIT` read it directly).
+The result picks the next SRAM address, and an unsynchronized pin
+changing at the clock edge could corrupt that address. Unlike `IN`
+and `WAIT`, `SKP` does not release the pin's OE.
 
 
 ### SET encoding detail

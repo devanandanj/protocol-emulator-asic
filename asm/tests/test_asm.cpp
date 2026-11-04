@@ -204,6 +204,17 @@ void uart_tx_shaped_program_assembles() {
     assert(r.words[8] == 0x7000);              // jmp start (start = 0)
 }
 
+void ext_encoding() {
+    auto r = asm_str("xor r0, r1\nand r2, r3\nor r4, r5\nadd r6, r7\nskeq r1, r2\nskp 3, 1\n");
+    assert(r.ok());
+    assert(r.words == (std::vector<std::uint16_t>{0xF001, 0xF123, 0xF245, 0xF367, 0xF412, 0xF531}));
+}
+
+void skp_rejects_pin_and_val_out_of_range() {
+    assert(!asm_str("skp 8, 1").ok());
+    assert(!asm_str("skp 3, 2").ok());
+}
+
 }  // namespace
 
 int main() {
@@ -226,6 +237,8 @@ int main() {
     ldi_encoding();
     ldi_imm_out_of_range_reports_error();
     out_od_encoding();
+    ext_encoding();
+    skp_rejects_pin_and_val_out_of_range();
     // error cases
     register_out_of_range_reports_error();
     wrong_operand_count_reports_error();
