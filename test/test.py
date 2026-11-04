@@ -584,6 +584,130 @@ _PS2_EVENTS, _PS2_CYCLES = _ps2_events([
     (0x5A, True, True),
 ])
 
+# IEEE 1149.1 TAP state machine: state -> (next if TMS=0, next if TMS=1).
+_TAP_NEXT = {
+    "RESET":    ("IDLE",     "RESET"),
+    "IDLE":     ("IDLE",     "SEL_DR"),
+    "SEL_DR":   ("CAP_DR",   "SEL_IR"),
+    "CAP_DR":   ("SH_DR",    "EX1_DR"),
+    "SH_DR":    ("SH_DR",    "EX1_DR"),
+    "EX1_DR":   ("PAUSE_DR", "UPD_DR"),
+    "PAUSE_DR": ("PAUSE_DR", "EX2_DR"),
+    "EX2_DR":   ("SH_DR",    "UPD_DR"),
+    "UPD_DR":   ("IDLE",     "SEL_DR"),
+    "SEL_IR":   ("CAP_IR",   "RESET"),
+    "CAP_IR":   ("SH_IR",    "EX1_IR"),
+    "SH_IR":    ("SH_IR",    "EX1_IR"),
+    "EX1_IR":   ("PAUSE_IR", "UPD_IR"),
+    "PAUSE_IR": ("PAUSE_IR", "EX2_IR"),
+    "EX2_IR":   ("SH_IR",    "UPD_IR"),
+    "UPD_IR":   ("IDLE",     "SEL_DR"),
+}
+_JTAG_IDCODE = 0x1BEEF0A3
+_IR_IDCODE, _IR_BYPASS, _IR_LEN = 0b1110, 0b1111, 4
+
+
+class _Tap:
+    """Far-end JTAG device with IDCODE and BYPASS instructions."""
+
+    def __init__(self):
+        self.state = "IDLE"     # not RESET: the host must get it there with TMS
+        self.ir = _IR_IDCODE
+        self.ir_sr = 0
+        self.dr = 0
+        self.dr_len = 1
+
+    def rising(self, tms, tdi):
+        st = self.state
+        if st == "RESET":
+            self.ir = _IR_IDCODE
+        elif st == "CAP_DR":
+            idcode = self.ir == _IR_IDCODE
+            self.dr, self.dr_len = (_JTAG_IDCODE, 32) if idcode else (0, 1)
+        elif st == "SH_DR":
+            self.dr = (self.dr >> 1) | (tdi << (self.dr_len - 1))
+        elif st == "CAP_IR":
+            self.ir_sr = 0b0001
+        elif st == "SH_IR":
+            self.ir_sr = (self.ir_sr >> 1) | (tdi << (_IR_LEN - 1))
+        elif st == "UPD_IR":
+            self.ir = self.ir_sr
+        self.state = _TAP_NEXT[st][tms]
+
+    def tdo(self):
+        if self.state == "SH_DR":
+            return self.dr & 1
+        if self.state == "SH_IR":
+            return self.ir_sr & 1
+        return 0
+
+
+def _jtag_events(trace, tck=0, tms=1, tdi=2, tdo=3):
+    """Run a TAP against a trace's pin waveform. Returns TDO pin events.
+
+    TCK does not depend on TDO, so a run with no pin events gives the real
+    waveform. TDO changes on the falling edge, seen by the chip a cycle later.
+    """
+    tap = _Tap()
+    events = []
+    level = 0
+    prev = 0
+    for row in trace:
+        out = row["pin_out"]
+        clk = (out >> tck) & 1
+        if clk and not prev:
+            tap.rising((out >> tms) & 1, (out >> tdi) & 1)
+        elif prev and not clk and tap.tdo() != level:
+            level = tap.tdo()
+            events.append((row["cycle"] + 1, level << tdo))
+        prev = clk
+    return events
+
+
+def _jtag_chunks(bits):
+    """Pack (tms, tdi) pairs into the program's {TMS, TDI} chunk stream."""
+    bits = bits + [(0, 0)] * (-len(bits) % 8)
+    stream = []
+    for i in range(0, len(bits), 8):
+        stream.append(sum(b[0] << k for k, b in enumerate(bits[i:i + 8])))
+        stream.append(sum(b[1] << k for k, b in enumerate(bits[i:i + 8])))
+    return stream
+
+
+def _tms(*seq):
+    return [(t, 0) for t in seq]
+
+
+_JTAG_TO_SHIFT_DR = _tms(1, 0, 0)
+_JTAG_RESET_TO_IDLE = _tms(1, 1, 1, 1, 1, 0)
+
+# Read IDCODE: the first bit returns on TCK 9, right after reaching Shift-DR.
+_JTAG_IDCODE_BITS = (_JTAG_RESET_TO_IDLE + _JTAG_TO_SHIFT_DR +
+                     _tms(*[0] * 31, 1) + _tms(1, 0))
+_JTAG_IDCODE_RX = list((_JTAG_IDCODE << 9).to_bytes(6, "little"))
+
+# Load BYPASS, then shift a pattern through its one-bit register. The IR
+# capture value's 1 returns on TCK 10; the pattern returns from TCK 20, one
+# clock late, and its top bit is left behind in the register.
+_JTAG_PATTERN = 0xA5
+_JTAG_BYPASS_BITS = (
+    _JTAG_RESET_TO_IDLE + _tms(1, 1, 0, 0) +
+    [(0, 1), (0, 1), (0, 1), (1, 1)] + _tms(1, 0) + _JTAG_TO_SHIFT_DR +
+    [(int(i == 7), (_JTAG_PATTERN >> i) & 1) for i in range(8)] + _tms(1, 0))
+_JTAG_BYPASS_RX = list(((1 << 10) | ((_JTAG_PATTERN & 0x7F) << 20)).to_bytes(4, "little"))
+
+
+def _jtag_protocol(name, bits, rx_expect):
+    """Build a _PROTOCOLS entry, using a first model run to drive the TAP."""
+    hex_path = _REPO_ROOT / "programs" / "jtag.hex"
+    cycles = 60 * len(bits) + 200
+    tx_bytes = _jtag_chunks(bits)
+    probe = _TRACE_DIR / f"{name}.probe.tsv"
+    _gen_golden(hex_path, probe, cycles, tx_bytes=tx_bytes)
+    events = _jtag_events(_load_trace(probe))
+    return (name, hex_path, cycles, tx_bytes, events, rx_expect, 0b1)
+
+
 # Protocol configs:
 # (name, hex-file, cycles, tx-bytes, pin-events, rx-expect, irq-expect)
 _PROTOCOLS = [
@@ -618,7 +742,12 @@ def _pre_generate_all_traces():
         subprocess.check_call(cmd)
 
 
-if os.environ.get("GATES") != "yes":
+if os.environ.get("GATES") != "yes" and _find_pemu_sim() is not None:
+    _TRACE_DIR.mkdir(exist_ok=True)
+    _PROTOCOLS += [
+        _jtag_protocol("jtag_idcode", _JTAG_IDCODE_BITS, _JTAG_IDCODE_RX),
+        _jtag_protocol("jtag_bypass", _JTAG_BYPASS_BITS, _JTAG_BYPASS_RX),
+    ]
     _pre_generate_all_traces()
 
 

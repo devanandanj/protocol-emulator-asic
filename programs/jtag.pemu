@@ -1,0 +1,40 @@
+; JTAG master: clocks whatever TMS/TDI stream the host sends, about 1 MHz TCK.
+;
+;   Pin 0 = TCK, pin 1 = TMS, pin 2 = TDI (outputs), pin 3 = TDO (input)
+;
+; The host sends 2-byte chunks to the TX FIFO: a TMS byte, then a TDI byte.
+; Each chunk makes 8 TCK pulses, LSB first, and returns one TDO byte to the
+; RX FIFO with IRQ 0. TAP state lives in the host's TMS stream, so this one
+; loop covers every JTAG operation. Pad a sequence to whole chunks with TMS=0
+; once it is back in Run-Test/Idle.
+;
+; TMS and TDI change while TCK is low. TDO is read just after the rising edge,
+; and the synchronizer makes that the level just before it. Devices change TDO
+; on the falling edge, so the value is stable.
+;
+; Register use:
+;   r0 TMS bits   r1 TDI bits   r2 bits left (JCND runs body N+1 times)
+;   r3 sampled TDO (upper bits stay 0)   r4 TDO byte being assembled
+
+        set   0, 0
+        set   1, 1
+        set   2, 0
+chunk:  pull  r0
+        pull  r1
+        ldi   r2, 7
+        ldi   r4, 0
+bit:    out   1, r0
+        out   2, r1
+        shift r0, right, 1
+        shift r1, right, 1
+        delay 21                ; TMS/TDI setup, TCK low
+        set   0, 1
+        in    3, r3
+        or    r4, r3            ; r4 bit 0 is free until the 8th rotate
+        rot   r4, right, 1
+        delay 20                ; TCK high
+        set   0, 0
+        jcnd  r2, bit
+        push  r4
+        irq   0
+        jmp   chunk

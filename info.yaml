@@ -41,10 +41,10 @@ pinout:
   uo[7]: ""
 
   # Bidirectional pins — programmable I/O the running program drives/reads.
-  uio[0]: "pin 0 (uart_tx TX, spi SCK)"
-  uio[1]: "pin 1 (spi MOSI)"
-  uio[2]: "pin 2 (spi MISO)"
-  uio[3]: "pin 3 (uart_rx RX, i2c SDA)"
+  uio[0]: "pin 0 (uart_tx TX, spi SCK, jtag TCK)"
+  uio[1]: "pin 1 (spi MOSI, jtag TMS)"
+  uio[2]: "pin 2 (spi MISO, jtag TDI)"
+  uio[3]: "pin 3 (uart_rx RX, i2c SDA, jtag TDO)"
   uio[4]: "pin 4 (i2c SCL)"
   uio[5]: "pin 5 (ps2 CLK)"
   uio[6]: "pin 6 (ps2 DATA)"
