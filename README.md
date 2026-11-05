@@ -25,9 +25,9 @@ JTAG, or slow-USB — just by loading a different program at boot.
 - **Cycle-accurate C++ model** (`model/`) — the golden reference the
   RTL is verified against.
 - **Assembler** (`asm/`) — turns `.pemu` mnemonics into 16-bit words.
-- **Seven protocol programs** in `programs/`: `uart_tx.pemu`,
+- **Eight protocol programs** in `programs/`: `uart_tx.pemu`,
   `uart_rx.pemu`, `spi.pemu`, `i2c_write.pemu`, `ps2.pemu`, `jtag.pemu`,
-  `swd.pemu`. Every one of them
+  `swd.pemu`, `can_tx.pemu`. Every one of them
   cycle-matches the C++ model in `test/test.py`.
 
 ## Verification story
@@ -54,7 +54,13 @@ jtag_bypass 1940 cycles match
 swd_rw      6000 cycles match
 swd_wait    4500 cycles match
 swd_parity  3500 cycles match
+can_tx_ack  4200 cycles match
+can_tx_nak  4600 cycles match
 ```
+
+`test_can_frame` goes one step further: an independent CAN receiver
+de-stuffs the chip's waveform and checks the CRC-15, so a stuffing or
+framing bug the shared model would also make is still caught.
 
 The full method, and what isn't covered yet, is in
 [docs/verification.md](docs/verification.md).

@@ -950,6 +950,117 @@ _SWD_OK, _SWD_WAIT = 0x20, 0x40
 _SWD_ID_BYTES = list(_SWD_IDCODE.to_bytes(4, "little"))
 _SWD_WORD_BYTES = list(_SWD_WORD.to_bytes(4, "little"))
 
+# ---- CAN 2.0A transmit: the host builds the frame, the chip does the bit layer.
+# The host computes CRC-15 and the logical SOF..CRC bit sequence; the chip adds
+# cycle-exact timing, the open-drain wired-AND bus, bit-stuffing, the un-stuffed
+# trailer, and senses the ACK bit. An independent receiver here de-stuffs the
+# chip's waveform and checks the CRC, so the program isn't graded against itself.
+_CAN_BUS = 0
+_CAN_IN_ADDR = 56        # 'in 0, r3' samples the ACK slot in can_tx.hex
+
+
+def _can_crc15(bits):
+    c = 0
+    for b in bits:
+        n = b ^ ((c >> 14) & 1)
+        c = (c << 1) & 0x7FFF
+        if n:
+            c ^= 0x4599
+    return c
+
+
+def _can_frame_bits(can_id, data):
+    """Logical (un-stuffed) SOF..CRC bit sequence of a standard data frame."""
+    bits = [0]                                              # SOF
+    bits += [(can_id >> i) & 1 for i in range(10, -1, -1)]  # 11-bit identifier
+    bits += [0, 0, 0]                                       # RTR, IDE, r0
+    bits += [(len(data) >> i) & 1 for i in range(3, -1, -1)]  # DLC
+    for by in data:
+        bits += [(by >> i) & 1 for i in range(7, -1, -1)]
+    crc = _can_crc15(bits)
+    bits += [(crc >> i) & 1 for i in range(14, -1, -1)]     # CRC-15
+    return bits
+
+
+def _can_pack(bits):
+    """Pack bits MSB-first into bytes (last byte left-aligned, low-padded)."""
+    out = []
+    for i in range(0, len(bits), 8):
+        chunk = bits[i:i + 8]
+        chunk += [0] * (8 - len(chunk))
+        out.append(int("".join(map(str, chunk)), 2))
+    return len(bits), out
+
+
+def _can_destuff(bits, n):
+    out, run, prev, i = [], 0, None, 0
+    while len(out) < n and i < len(bits):
+        b = bits[i]
+        i += 1
+        out.append(b)
+        if b == prev:
+            run += 1
+        else:
+            run, prev = 1, b
+        if run == 5 and len(out) < n and i < len(bits):
+            prev, run = bits[i], 1          # drop the inserted stuff bit
+            i += 1
+    return out
+
+
+def _can_decode(trace, nlogical, bus=_CAN_BUS):
+    """Far-end CAN receiver: recover the logical frame from the chip's
+    open-drain waveform (dominant = driven low) and return (bits, crc_ok)."""
+    import statistics
+    level = [0 if ((r["pin_oe"] >> bus) & 1 and not (r["pin_out"] >> bus) & 1)
+             else 1 for r in trace]
+    first = next(i for i, v in enumerate(level) if v == 0)   # SOF edge
+    runs, i = [], first
+    while i < len(level):
+        j = i
+        while j < len(level) and level[j] == level[i]:
+            j += 1
+        runs.append((j - i, level[i]))
+        i = j
+    base = min(r for r, _ in runs)
+    T = statistics.median(r for r, _ in runs if r < 1.5 * base)  # one-bit slot
+    stuffed = []
+    for length, lvl in runs:
+        stuffed += [lvl] * max(1, round(length / T))
+    logical = _can_destuff(stuffed, nlogical)
+    body, crc_bits = logical[:nlogical - 15], logical[nlogical - 15:nlogical]
+    crc_rx = sum(b << (14 - k) for k, b in enumerate(crc_bits))
+    return logical, (len(logical) == nlogical and _can_crc15(body) == crc_rx)
+
+
+_CAN_EXPECT = {}     # name -> (logical bits, nbits) for the decode check
+
+
+def _can_protocol(name, can_id, data, cycles, ack):
+    """Build a _PROTOCOLS entry. The chip samples the ACK slot once (the 'in'
+    at _CAN_IN_ADDR); for an ACK the far end pulls the bus dominant across it."""
+    hex_path = _REPO_ROOT / "programs" / "can_tx.hex"
+    logical = _can_frame_bits(can_id, data)
+    nbits, packed = _can_pack(logical)
+    tx = [nbits] + packed
+    recessive = 1 << _CAN_BUS
+    events = [(0, recessive)]                       # bus idle: recessive
+    if ack:
+        probe = _TRACE_DIR / f"{name}.probe.tsv"
+        _gen_golden(hex_path, probe, cycles, tx_bytes=tx, pin_events=events)
+        # pc sits at the IN's address through the preceding DELAY stall; the IN
+        # samples the bus at the last such cycle (through the 2-flop sync).
+        sample = [r["cycle"] for r in _load_trace(probe) if r["pc"] == _CAN_IN_ADDR]
+        if not sample:
+            raise RuntimeError(f"{name}: never reached the ACK sample")
+        c = sample[-1]
+        events += [(c - 4, 0), (c + 4, recessive)]  # far end acknowledges
+    _CAN_EXPECT[name] = (logical, nbits)
+    rx_expect = [0] if ack else [1]                 # ACK bit: 0 = acked
+    irq_expect = 0b01 if ack else 0b10              # IRQ0 acked, IRQ1 no ack
+    return (name, hex_path, cycles, tx, events, rx_expect, irq_expect)
+
+
 # Protocol configs:
 # (name, hex-file, cycles, tx-bytes, pin-events, rx-expect, irq-expect)
 _PROTOCOLS = [
@@ -1003,6 +1114,10 @@ if os.environ.get("GATES") != "yes" and _find_pemu_sim() is not None:
         # The target sends a wrong parity bit; the chip must flag it.
         _swd_protocol("swd_parity", [_SWD_LINE_RESET, _SWD_READ_ID], 3500,
                       [_SWD_OK] + _SWD_ID_BYTES, 0b011, bad_read_parity=True),
+        # CAN: a standard data frame. The far end acknowledges on one, not the
+        # other, so both ACK-sense paths are checked.
+        _can_protocol("can_tx_ack", 0x123, [0xDE, 0xAD], 4200, ack=True),
+        _can_protocol("can_tx_nak", 0x2AA, [0x0F, 0xF0, 0x3C], 4600, ack=False),
     ]
     _pre_generate_all_traces()
 
@@ -1022,3 +1137,19 @@ async def test_protocols(dut):
         await _run_protocol(dut, name, hex_path, cycles, tx_bytes=tx_bytes,
                             pin_events=pin_events, rx_expect=rx_expect,
                             irq_expect=irq_expect)
+
+
+@cocotb.test(skip=os.environ.get("GATES") == "yes")
+async def test_can_frame(dut):
+    """The CAN waveform decodes back to the intended frame, CRC and all.
+
+    test_protocols already proves the RTL matches the model cycle-for-cycle, so
+    decoding the model's golden trace with an independent receiver proves the
+    bits the chip puts on the wire are a valid, correct CAN frame.
+    """
+    for name, (logical, nbits) in _CAN_EXPECT.items():
+        trace = _load_trace(_TRACE_DIR / f"{name}.trace.tsv")
+        bits, crc_ok = _can_decode(trace, nbits)
+        assert crc_ok, f"{name}: CRC-15 mismatch on the decoded frame"
+        assert bits == logical, f"{name}: decoded frame differs from the sent frame"
+        dut._log.info(f"{name}: receiver decoded {nbits}-bit frame, CRC ok")

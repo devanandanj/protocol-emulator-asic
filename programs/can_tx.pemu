@@ -1,0 +1,120 @@
+; CAN 2.0A data-frame transmitter (physical/bit layer).
+;
+; Split (see docs): the HOST computes CRC-15 and assembles the logical bit
+; sequence SOF..CRC, packs it MSB-first into bytes, and sends via TX FIFO:
+;     [Nbits, b0, b1, ...]   (last byte left-aligned, low bits padded)
+; The CHIP does the CAN-specific real-time work: cycle-exact bit timing, the
+; open-drain wired-AND bus (OUT_OD: 0 = dominant/drive-low, 1 = recessive/
+; release), on-chip bit-stuffing (a complement bit after any 5 identical bits,
+; SOF..CRC), the un-stuffed trailer (CRC delim, ACK slot, ACK delim, EOF, IFS),
+; and sensing the ACK bit back off the wire.
+;
+; Stuffing fires the moment a run reaches 5, before the next bit is examined,
+; so "5 identical then a different bit" still gets its stuff bit.
+;
+; Pin 0 = CAN bus (open-drain, external recessive pull-up). Read back for ACK.
+;
+; Host result: RX FIFO byte = ACK bit (0 = ACK seen, 1 = no ACK);
+;   IRQ 0 = frame sent and ACKed, IRQ 1 = frame sent, no ACK.
+;
+; Registers:
+;   r0 = real bits remaining in the stuffed field (then trailer counter)
+;   r1 = current source byte, rotated MSB-first
+;   r2 = bits left in current byte (0 => reload)
+;   r3 = current bit value (0/1); also the ACK sample
+;   r4 = run budget: 4 after a run's first bit; 0 means 5 sent => stuff pending
+;   r5 = previous transmitted bit value (0xFF sentinel at start)
+;   r6 = scratch (zero / bit copy / complement)
+;   r7 = constant 1 (recessive drive, complement helper)
+;
+; shortcut: bit slot timing is DELAY-dominated (40 cycles); the few bookkeeping
+; cycles between bits are absorbed by the far end's run-length/edge decode,
+; which bit-stuffing keeps bounded. Tighten with per-path delay tuning if a
+; jitter-sensitive receiver is targeted.
+
+        ldi   r7, 1                 ; constant '1'
+        ldi   r5, 0xFF              ; prev = sentinel (first bit is a new run)
+        ldi   r4, 4                 ; nonzero so no spurious stuff before SOF
+        out_od 0, r7                ; bus idle: recessive
+        delay 40
+
+start:  pull  r0                    ; Nbits (logical bits, SOF..CRC)
+        ldi   r2, 0                 ; force a byte reload on the first bit
+
+sendloop:
+        jcnd  r0, getbit            ; r0 != 0 -> r0--, one more real bit
+        jmp   trailer
+
+getbit:
+        ; pending stuff? previous run reached 5 (r4 == 0)
+        xor   r6, r6                ; r6 = 0
+        skeq  r4, r6                ; r4 == 0 ?
+        jmp   nopend
+        xor   r6, r6
+        or    r6, r5
+        xor   r6, r7                ; r6 = complement of prev
+        out_od 0, r6                ; drive the stuff bit
+        delay 40
+        xor   r5, r5
+        or    r5, r6                ; prev = stuff bit
+        ldi   r4, 4                 ; stuff is bit #1 of a new run
+nopend:
+        jcnd  r2, haveb             ; bits left in r1? -> r2--, use them
+        pull  r1                    ; else load the next source byte
+        ldi   r2, 7                 ; this bit + 7 more = 8
+        jmp   extract
+haveb:  nop                         ; pad so reload and non-reload slots match
+        nop
+extract:
+        rot   r1, left, 1           ; next MSB into bit 0
+        xor   r6, r6
+        or    r6, r1
+        and   r6, r7                ; r6 = bit value (0/1)
+        xor   r3, r3
+        or    r3, r6                ; r3 = bit value
+        skeq  r3, r5                ; same as the previous bit?
+        jmp   diffbit
+        ; same bit: send, spend one from the run budget
+        out_od 0, r3
+        delay 40
+        jcnd  r4, sendloop          ; r4 != 0 -> r4--, continue (prev unchanged)
+        jmp   sendloop              ; r4 hit 0: 5th identical sent, stuff next pass
+diffbit:
+        out_od 0, r3                ; send, open a new run
+        delay 40
+        xor   r5, r5
+        or    r5, r3                ; prev = bit
+        ldi   r4, 4
+        jmp   sendloop
+
+trailer:
+        ; trailing stuff if the field ended on a run of exactly 5
+        xor   r6, r6
+        skeq  r4, r6                ; r4 == 0 ?
+        jmp   crcdelim
+        xor   r6, r6
+        or    r6, r5
+        xor   r6, r7                ; complement of the last bit
+        out_od 0, r6
+        delay 40
+crcdelim:
+        out_od 0, r7                ; CRC delimiter (recessive)
+        delay 40
+        out_od 0, r7                ; ACK slot: release the bus
+        delay 40
+        in    0, r3                 ; r3 bit0 = bus (0 = dominant = ACK)
+        ldi   r0, 11                ; ACK delim (1) + EOF (7) + IFS (3)
+eofbit: jcnd  r0, eof
+        jmp   report
+eof:    out_od 0, r7                ; recessive
+        delay 40
+        jmp   eofbit
+report:
+        push  r3                    ; ACK bit to the host
+        xor   r6, r6
+        skeq  r3, r6                ; ACK (r3 == 0) ?
+        jmp   nak
+        irq   0                     ; done + ACK
+        jmp   start
+nak:    irq   1                     ; done, no ACK
+        jmp   start
