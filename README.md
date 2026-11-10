@@ -10,8 +10,8 @@ Rather than hardwire a UART, an SPI master, and an I²C master as three
 independent blocks, PEmu is a tiny instruction-set core purpose-built
 for reading and writing pins on a cycle-precise schedule (in the
 tradition of the RP2040 PIO state machines and the TI Sitara PRU).
-The same silicon emulates UART, SPI, or I²C — and, we hope, PS/2,
-JTAG, or slow-USB — just by loading a different program at boot.
+The same silicon emulates UART, SPI, I²C, PS/2, JTAG, SWD, or CAN —
+just by loading a different program at boot.
 
 ## What's shipped
 
@@ -29,6 +29,11 @@ JTAG, or slow-USB — just by loading a different program at boot.
   `uart_rx.pemu`, `spi.pemu`, `i2c_write.pemu`, `ps2.pemu`, `jtag.pemu`,
   `swd.pemu`, `can_tx.pemu`. Every one of them
   cycle-matches the C++ model in `test/test.py`.
+- **Reverse-engineering demo** — a readable cycle counter lets a
+  program time a target to the cycle. `lockprobe.pemu` uses it to
+  recover a secret from a lock's response time one byte at a time: a
+  hardware timing side-channel, verified on RTL against a live attack
+  target (`test_lockcrack`).
 
 ## Verification story
 

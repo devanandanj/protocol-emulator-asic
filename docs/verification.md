@@ -30,11 +30,26 @@ and don't share code with the programs:
   host's TMS stream has to bring it there.
 - SWD: a target with DP registers, line reset, WAIT and bad parity. It checks
   request framing, write parity and bus contention.
+- CAN: an independent receiver that de-stuffs the chip's waveform and checks
+  the CRC-15, and a far end that does or doesn't acknowledge in the ACK slot.
 
 JTAG and SWD devices react to the chip's real output. TCK doesn't depend on
 TDO, so JTAG needs one model run to get the waveform. SWD replies change the
 chip's path, so the test repeats model run and target replay until the pin
 events stop changing.
+
+The CAN receiver is the clearest case for this layer. An early bit-stuffing bug
+— it stuffed only when the next bit matched, missing "five identical then a
+different bit" — sailed through the golden trace: the RTL and the model run the
+same program, so they shared the bug and agreed cycle-for-cycle. Only the
+independent receiver, checking a real CRC, caught it. Break the stuffing again
+on purpose (stuff after six) and the golden trace still reports "match" while
+the receiver's CRC fails at once.
+
+A second program is a tool in its own right. `lockprobe` reads the cycle counter
+to time a target's response; against a lock that bails at the first wrong byte,
+the host recovers the secret one byte at a time. `test_lockcrack` runs that
+attack on the RTL against a live target model and asserts the recovered secret.
 
 **Pins-only host path.** Tests send all data through the SPI host port. They
 still read internal signals to check state, but never write them. This rule
@@ -56,6 +71,8 @@ manual runs, not an automated suite.
 | PS/2        | No parity check, no stop check, reversed bits                     |
 | JTAG        | TDI from wrong register, bytes swapped, 7-bit chunks              |
 | SWD         | Write parity, no turnaround, early drive, read parity, short reset|
+| CAN         | Stuff after six — caught by the receiver's CRC, not the golden trace|
+| Lock-cracker| Zero timing leak, so the byte-by-byte search recovers the wrong secret|
 
 Three of these first passed, which exposed test gaps: `ext_test` never
 changed a pin as `WAIT` issued, the SWD test word had even parity, and the SWD
@@ -68,7 +85,9 @@ target ignored bus contention. All three are fixed.
 | `test_step3`         | Opcode walk, FIFO drain, IRQ read and clear                  |
 | `test_sram_prog_mem` | Code above address 64, writes refused while running, restart |
 | `test_host_port`     | Status byte, TX full and overflow, unknown commands, cut frames, FIFO order |
-| `test_protocols`     | Every shipped program against its golden trace               |
+| `test_protocols`     | Every shipped program (UART/SPI/I²C/PS2/JTAG/SWD/CAN + the cycle-counter probe) against its golden trace |
+| `test_can_frame`     | Independent CAN receiver de-stuffs the waveform and verifies CRC-15 |
+| `test_lockcrack`     | Cycle-counter timing probe recovers a secret byte-by-byte on real RTL |
 | `test_gl_smoke`      | Gate-level netlist: load and run through the pins            |
 | `ctest`              | Model and assembler unit tests                               |
 

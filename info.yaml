@@ -7,7 +7,7 @@ project:
   language:     "Verilog"
   clock_hz:     50000000
 
-  # 6x4 is the competition's required tile size. Program memory is a
+  # 6x4 is the chosen tile size, max is 8x4. Program memory is a
   # 256x16 IHP SRAM macro (see src/config.json), not flip-flops.
   tiles: "6x4"
 
