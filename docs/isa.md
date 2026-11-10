@@ -9,7 +9,7 @@ diffs RTL and model cycle-for-cycle on every one of them.
 
 1. Emulate UART, SPI, and I²C from firmware; leave headroom for
    PS/2, slow USB, or JTAG as stretch protocols.
-2. Fit into 6×4 Tiny Tapeout tiles (~24K logic cells) *including*
+2. Fit into 8×4 Tiny Tapeout tiles (~32K logic cells) *including*
    register file, program memory, pin mux, and host interface.
 3. Cycle-precise timing so bit periods and setup/hold windows are
    deterministic from the outside.

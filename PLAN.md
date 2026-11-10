@@ -78,7 +78,7 @@ If everything goes to plan, on 2027-01-17 we are handing Jane
 Street a repo that contains:
 
 - **RTL** — a ~2–3K-line Verilog core plus TT wrapper, fitting in
-  8×4 (or 8×2, TBD) tiles, closing timing at the target clock.
+  8×4 tiles, closing timing at the target clock.
 - **A GDS** — signed off through the CMOS5L OpenLane flow and
   passing DRC/LVS.
 - **An ISA doc** — one short PDF/markdown, opcodes and encoding
@@ -242,9 +242,9 @@ on that program.
 
 ## 7. Risks and unknowns we're actively tracking
 
-- **Tile shape.** Blog says 8×4, template comment lists 1x1..8x2.
-  Answer this on the TT / Jane Street channel *before* Phase 2
-  ends — the floorplan choice cascades into what fits.
+- **Tile shape.** Resolved: 8×4 is confirmed for the March 2027
+  CMOS5L shuttle and Tiny Tapeout says tile sizes are final. The
+  template's main branch (action tag `ttihp27a`) now targets CMOS5L.
 - **Timing on 130nm.** Older nodes are slower. We may find our
   achievable clock is lower than we assumed, which stretches
   UART bit periods and eats into DELAY range. Mitigation: make

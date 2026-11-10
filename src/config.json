@@ -40,7 +40,7 @@
   "//": "the PDK (libs.ref/sg13cmos5l_sram symlinks to sg13g2_sram). This setup",
   "//": "follows 2AMLogic/sg13cmos5l-protocol-emulator (Apache-2.0), the first",
   "//": "public design to take this macro through the CMOS5L flow.",
-  "//": "Placement: 6x4 die is 1289.28 x 710.64 um. x=91.2 matches 2AMLogic's",
+  "//": "Placement: 8x4 die is 1724.16 x 710.64 um. x=91.2 matches 2AMLogic's",
   "//": "placement so the PDN strap lattice below lines up with the macro's",
   "//": "Metal4 power stripes; y=570.78 (151 rows of 3.78 um) puts the macro",
   "//": "near the top edge. Both are site multiples (0.48 x 3.78 um).",

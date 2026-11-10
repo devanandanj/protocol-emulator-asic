@@ -6,7 +6,7 @@
 # Tapeout CMOS5L flow. Their header follows unchanged. For PEmu the macro
 # instance is core.u_sram, placed at the same x (91.2 um) as theirs, so the
 # strap-lattice alignment (FP_PDN_VPITCH 44.96 / FP_PDN_VOFFSET 93.985)
-# carries over; only the y position differs for the 6x4 die.
+# carries over; only the y position differs for the 8x4 die.
 #
 # Custom PDN configuration for the SRAM-macro-backed top (issue #60).
 #
